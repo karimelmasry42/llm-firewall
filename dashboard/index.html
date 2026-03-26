@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PromptShield — Monitoring Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0e1a;
+            --bg-secondary: #111827;
+            --bg-card: #1a2235;
+            --bg-card-hover: #1f2a40;
+            --border: #2d3748;
+            --text-primary: #e2e8f0;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent-blue: #3b82f6;
+            --accent-cyan: #06b6d4;
+            --accent-green: #10b981;
+            --accent-red: #ef4444;
+            --accent-orange: #f59e0b;
+            --accent-purple: #8b5cf6;
+            --gradient-blue: linear-gradient(135deg, #3b82f6, #06b6d4);
+            --gradient-green: linear-gradient(135deg, #10b981, #06b6d4);
+            --gradient-red: linear-gradient(135deg, #ef4444, #f59e0b);
+            --gradient-purple: linear-gradient(135deg, #8b5cf6, #ec4899);
+            --shadow-glow: 0 0 20px rgba(59, 130, 246, 0.15);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Background grid effect */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background-image:
+                radial-gradient(circle at 20% 50%, rgba(59, 130, 246, 0.05) 0%, transparent 50%),
+                radial-gradient(circle at 80% 20%, rgba(139, 92, 246, 0.05) 0%, transparent 50%),
+                radial-gradient(circle at 50% 80%, rgba(6, 182, 212, 0.05) 0%, transparent 50%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 24px;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* Header */
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 32px;
+            padding-bottom: 24px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .logo {
+            width: 48px;
+            height: 48px;
+            background: var(--gradient-blue);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            box-shadow: var(--shadow-glow);
+        }
+
+        .header h1 {
+            font-size: 28px;
+            font-weight: 700;
+            background: var(--gradient-blue);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .header p {
+            color: var(--text-secondary);
+            font-size: 14px;
+            margin-top: 2px;
+        }
+
+        .live-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            padding: 8px 16px;
+            border-radius: 24px;
+            font-size: 13px;
+            color: var(--accent-green);
+            font-weight: 500;
+        }
+
+        .live-dot {
+            width: 8px;
+            height: 8px;
+            background: var(--accent-green);
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4); }
+            50% { opacity: 0.7; box-shadow: 0 0 0 8px rgba(16, 185, 129, 0); }
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .config-strip {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .config-chip {
+            background: rgba(148, 163, 184, 0.08);
+            border: 1px solid rgba(148, 163, 184, 0.18);
+            color: var(--text-secondary);
+            padding: 10px 14px;
+            border-radius: 999px;
+            font-size: 12px;
+            line-height: 1;
+        }
+
+        .workspace-grid {
+            display: grid;
+            grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.9fr);
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .panel::before {
+            content: '';
+            position: absolute;
+            inset: 0 0 auto 0;
+            height: 3px;
+            background: var(--gradient-blue);
+        }
+
+        .panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .panel-title {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .panel-subtitle {
+            color: var(--text-secondary);
+            font-size: 13px;
+            margin-top: 4px;
+        }
+
+        .status-pill {
+            padding: 8px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+            border: 1px solid rgba(59, 130, 246, 0.25);
+            background: rgba(59, 130, 246, 0.1);
+            color: var(--accent-blue);
+        }
+
+        .status-pill.blocked {
+            border-color: rgba(239, 68, 68, 0.3);
+            background: rgba(239, 68, 68, 0.12);
+            color: var(--accent-red);
+        }
+
+        .status-pill.allowed {
+            border-color: rgba(16, 185, 129, 0.3);
+            background: rgba(16, 185, 129, 0.12);
+            color: var(--accent-green);
+        }
+
+        .status-pill.loading {
+            border-color: rgba(245, 158, 11, 0.3);
+            background: rgba(245, 158, 11, 0.12);
+            color: var(--accent-orange);
+        }
+
+        .compose-form {
+            display: grid;
+            gap: 16px;
+        }
+
+        .field-label {
+            display: block;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+
+        .prompt-input {
+            width: 100%;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 14px;
+        }
+
+        .prompt-input {
+            min-height: 180px;
+            resize: vertical;
+            padding: 16px;
+            line-height: 1.6;
+        }
+
+        .prompt-input:focus {
+            outline: none;
+            border-color: rgba(59, 130, 246, 0.7);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+        }
+
+        .form-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .helper-text {
+            color: var(--text-secondary);
+            font-size: 12px;
+            line-height: 1.5;
+        }
+
+        .helper-text code {
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+
+        .send-button {
+            border: 0;
+            border-radius: 12px;
+            padding: 12px 18px;
+            font-family: inherit;
+            font-size: 14px;
+            font-weight: 600;
+            color: white;
+            background: var(--gradient-blue);
+            cursor: pointer;
+            box-shadow: var(--shadow-glow);
+            transition: transform 0.2s ease, opacity 0.2s ease;
+        }
+
+        .send-button:hover {
+            transform: translateY(-1px);
+        }
+
+        .send-button:disabled {
+            opacity: 0.65;
+            cursor: wait;
+            transform: none;
+        }
+
+        .response-box {
+            min-height: 286px;
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            background: linear-gradient(180deg, rgba(17, 24, 39, 0.95), rgba(10, 14, 26, 0.95));
+            padding: 18px;
+            display: grid;
+            gap: 16px;
+        }
+
+        .response-block {
+            display: grid;
+            gap: 8px;
+        }
+
+        .response-label {
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+        }
+
+        .response-value {
+            color: var(--text-primary);
+            font-size: 14px;
+            line-height: 1.6;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .stat-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 24px;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-glow);
+        }
+
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+        }
+
+        .stat-card.total::before { background: var(--gradient-blue); }
+        .stat-card.allowed::before { background: var(--gradient-green); }
+        .stat-card.blocked::before { background: var(--gradient-red); }
+        .stat-card.dropped::before { background: var(--gradient-purple); }
+        .stat-card.latency::before { background: linear-gradient(135deg, #06b6d4, #3b82f6); }
+
+        .stat-label {
+            font-size: 13px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .stat-value {
+            font-size: 36px;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .stat-card.total .stat-value { color: var(--accent-blue); }
+        .stat-card.allowed .stat-value { color: var(--accent-green); }
+        .stat-card.blocked .stat-value { color: var(--accent-red); }
+        .stat-card.dropped .stat-value { color: var(--accent-purple); }
+        .stat-card.latency .stat-value { color: var(--accent-cyan); font-size: 28px; }
+
+        .stat-icon {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            font-size: 28px;
+            opacity: 0.3;
+        }
+
+        /* Log Table */
+        .log-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            overflow: hidden;
+        }
+
+        .log-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 20px 24px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .log-header h2 {
+            font-size: 18px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .log-controls {
+            display: flex;
+            gap: 8px;
+        }
+
+        .log-controls button {
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            color: var(--accent-blue);
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            font-family: inherit;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .log-controls button:hover {
+            background: rgba(59, 130, 246, 0.2);
+        }
+
+        .log-controls select {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-family: inherit;
+            cursor: pointer;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        thead th {
+            background: var(--bg-secondary);
+            padding: 14px 20px;
+            text-align: left;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            font-weight: 600;
+            border-bottom: 1px solid var(--border);
+        }
+
+        tbody td {
+            padding: 16px 20px;
+            border-bottom: 1px solid rgba(45, 55, 72, 0.5);
+            font-size: 13px;
+            vertical-align: top;
+        }
+
+        tbody tr {
+            transition: background-color 0.2s;
+        }
+
+        tbody tr:hover {
+            background: var(--bg-card-hover);
+        }
+
+        tbody tr.new-entry {
+            animation: fadeIn 0.5s ease;
+        }
+
+        @keyframes fadeIn {
+            from { background-color: rgba(59, 130, 246, 0.1); }
+            to { background-color: transparent; }
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+        }
+
+        .badge-allowed {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--accent-green);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+        }
+
+        .badge-blocked {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--accent-red);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .badge-dropped {
+            background: rgba(139, 92, 246, 0.15);
+            color: var(--accent-purple);
+            border: 1px solid rgba(139, 92, 246, 0.3);
+        }
+
+        .badge-error {
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--accent-orange);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+
+        .text-truncate {
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .scores-bar {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .score-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 500;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+
+        .score-chip.safe {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--accent-green);
+        }
+
+        .score-chip.danger {
+            background: rgba(239, 68, 68, 0.1);
+            color: var(--accent-red);
+        }
+
+        .score-chip.warning {
+            background: rgba(245, 158, 11, 0.1);
+            color: var(--accent-orange);
+        }
+
+        .score-chip.neutral {
+            background: rgba(6, 182, 212, 0.12);
+            color: var(--accent-cyan);
+        }
+
+        .detail-text {
+            color: var(--text-secondary);
+            font-size: 12px;
+            max-width: 250px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .timestamp {
+            color: var(--text-muted);
+            font-size: 12px;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+
+        .empty-state .emoji {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+
+        .empty-state p {
+            font-size: 14px;
+            max-width: 400px;
+            margin: 0 auto;
+            line-height: 1.6;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .header { flex-direction: column; gap: 16px; }
+            .text-truncate { max-width: 150px; }
+            .workspace-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div class="header-left">
+                <div class="logo">🛡️</div>
+                <div>
+                    <h1>PromptShield</h1>
+                    <p>Route prompts through every guardrail before they reach the LLM</p>
+                </div>
+            </div>
+            <div class="live-badge">
+                <div class="live-dot"></div>
+                <span>Live Monitoring</span>
+            </div>
+        </div>
+
+        <div class="config-strip">
+            <div class="config-chip" id="config-upstream">Upstream URL: loading...</div>
+            <div class="config-chip" id="config-default-model">Default model: loading...</div>
+            <div class="config-chip" id="config-input-models">Input models: loading...</div>
+            <div class="config-chip" id="config-output-models">Output models: loading...</div>
+        </div>
+
+        <div class="workspace-grid">
+            <section class="panel">
+                <div class="panel-header">
+                    <div>
+                        <div class="panel-title">Prompt Router</div>
+                        <div class="panel-subtitle">Send a prompt through every input classifier, then every output classifier.</div>
+                    </div>
+                    <div class="status-pill" id="request-status">Idle</div>
+                </div>
+
+                <form class="compose-form" id="prompt-form">
+                    <div>
+                        <label class="field-label" for="prompt-input">Prompt</label>
+                        <textarea class="prompt-input" id="prompt-input" placeholder="Ask a question or paste a prompt here."></textarea>
+                    </div>
+                    <div class="form-footer">
+                        <div class="helper-text">
+                            The dashboard submits to <code>/v1/chat/completions</code>. Change the upstream LLM by editing the configured URL on the server.
+                        </div>
+                        <button class="send-button" id="send-button" type="submit">Send Through Firewall</button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="panel">
+                <div class="panel-header">
+                    <div>
+                        <div class="panel-title">Last Response</div>
+                        <div class="panel-subtitle">Approved answers appear here. Blocked answers return the refusal message.</div>
+                    </div>
+                </div>
+
+                <div class="response-box">
+                    <div class="response-block">
+                        <div class="response-label">Prompt</div>
+                        <div class="response-value" id="response-prompt">No prompt sent yet.</div>
+                    </div>
+                    <div class="response-block">
+                        <div class="response-label">Assistant</div>
+                        <div class="response-value" id="response-output">Responses will appear here after the firewall processes a request.</div>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- Stats -->
+        <div class="stats-grid">
+            <div class="stat-card total">
+                <div class="stat-icon">📊</div>
+                <div class="stat-label">Total Requests</div>
+                <div class="stat-value" id="stat-total">0</div>
+            </div>
+            <div class="stat-card allowed">
+                <div class="stat-icon">✅</div>
+                <div class="stat-label">Allowed</div>
+                <div class="stat-value" id="stat-allowed">0</div>
+            </div>
+            <div class="stat-card blocked">
+                <div class="stat-icon">🚫</div>
+                <div class="stat-label">Input Blocked</div>
+                <div class="stat-value" id="stat-blocked">0</div>
+            </div>
+            <div class="stat-card dropped">
+                <div class="stat-icon">🗑️</div>
+                <div class="stat-label">Output Dropped</div>
+                <div class="stat-value" id="stat-dropped">0</div>
+            </div>
+            <div class="stat-card latency">
+                <div class="stat-icon">⏱️</div>
+                <div class="stat-label">Avg Total Latency</div>
+                <div class="stat-value" id="stat-latency-average">0.0 ms</div>
+            </div>
+        </div>
+
+        <!-- Log Table -->
+        <div class="log-section">
+            <div class="log-header">
+                <h2>📜 Decision Log</h2>
+                <div class="log-controls">
+                    <select id="filter-decision">
+                        <option value="ALL">All Decisions</option>
+                        <option value="ALLOWED">Allowed</option>
+                        <option value="BLOCKED">Blocked</option>
+                        <option value="DROPPED">Dropped</option>
+                        <option value="ERROR">Errors</option>
+                    </select>
+                    <button onclick="refreshData()">🔄 Refresh</button>
+                </div>
+            </div>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Time</th>
+                        <th>Decision</th>
+                        <th>Prompt / Message</th>
+                        <th>Response</th>
+                        <th>Scores / Latency</th>
+                        <th>Detail</th>
+                    </tr>
+                </thead>
+                <tbody id="log-body">
+                    <tr>
+                        <td colspan="6">
+                            <div class="empty-state">
+                                <div class="emoji">🛡️</div>
+                                <p>No requests yet. Send requests to the firewall at <code>/v1/chat/completions</code> or run the simulation script.</p>
+                            </div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+        const FALLBACK_MODEL = 'firewall-demo';
+        let currentFilter = 'ALL';
+        let allLogs = [];
+        let runtimeConfig = null;
+
+        // Filter change handler
+        document.getElementById('filter-decision').addEventListener('change', (e) => {
+            currentFilter = e.target.value;
+            renderLogs();
+        });
+        document.getElementById('prompt-form').addEventListener('submit', sendPrompt);
+
+        function getDecisionBadge(decision) {
+            const map = {
+                'ALLOWED': '<span class="badge badge-allowed">✅ Allowed</span>',
+                'BLOCKED': '<span class="badge badge-blocked">🚫 Blocked</span>',
+                'DROPPED': '<span class="badge badge-dropped">🗑️ Dropped</span>',
+                'ERROR':   '<span class="badge badge-error">⚠️ Error</span>',
+            };
+            return map[decision] || `<span class="badge">${decision}</span>`;
+        }
+
+        function formatLatency(value) {
+            const numeric = Number(value);
+            if (!Number.isFinite(numeric)) return '-';
+            return `${numeric.toFixed(1)} ms`;
+        }
+
+        function getScoreChip(name, value, latencyMs) {
+            const pct = (value * 100).toFixed(0);
+            let cls = 'safe';
+            if (value > 0.7) cls = 'danger';
+            else if (value > 0.3) cls = 'warning';
+            const latencyLabel = Number.isFinite(Number(latencyMs))
+                ? ` | ${formatLatency(latencyMs)}`
+                : '';
+            return `<span class="score-chip ${cls}">${escapeHtml(name)}: ${pct}%${latencyLabel}</span>`;
+        }
+
+        function getTotalLatencyChip(totalLatencyMs) {
+            if (!Number.isFinite(Number(totalLatencyMs))) return '';
+            return `<span class="score-chip neutral">total: ${formatLatency(totalLatencyMs)}</span>`;
+        }
+
+        function shouldDisplayClassifierChip(name) {
+            return name !== 'input:Language Router';
+        }
+
+        function formatTimestamp(ts) {
+            if (!ts) return '-';
+            const d = new Date(ts);
+            return d.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text || '';
+            return div.innerHTML;
+        }
+
+        function setRequestStatus(label, mode = '') {
+            const status = document.getElementById('request-status');
+            status.textContent = label;
+            status.className = `status-pill${mode ? ` ${mode}` : ''}`;
+        }
+
+        function renderConfig(config) {
+            runtimeConfig = config;
+            document.getElementById('config-upstream').textContent =
+                `Upstream URL: ${config.upstream_chat_completions_url || 'Not configured'}`;
+            document.getElementById('config-default-model').textContent =
+                `Default model: ${config.default_model_id || FALLBACK_MODEL}`;
+            document.getElementById('config-input-models').textContent =
+                `Input models: ${(config.input_models || []).join(', ') || 'None loaded'}`;
+            document.getElementById('config-output-models').textContent =
+                `Output models: ${(config.output_models || []).join(', ') || 'None loaded'}`;
+        }
+
+        function renderLogs() {
+            const tbody = document.getElementById('log-body');
+            const filtered = currentFilter === 'ALL'
+                ? allLogs
+                : allLogs.filter(l => l.decision === currentFilter);
+
+            if (filtered.length === 0) {
+                tbody.innerHTML = `
+                    <tr><td colspan="6">
+                        <div class="empty-state">
+                            <div class="emoji">🔍</div>
+                            <p>No entries match the selected filter.</p>
+                        </div>
+                    </td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = filtered.map(log => {
+                const scores = log.scores || {};
+                const latencies = log.latencies_ms || {};
+                const chips = Object.entries(scores)
+                    .filter(([k]) => shouldDisplayClassifierChip(k))
+                    .map(([k, v]) => getScoreChip(k, v, latencies[k]));
+                const totalLatencyChip = getTotalLatencyChip(log.total_latency_ms);
+                if (totalLatencyChip) chips.push(totalLatencyChip);
+                const scoreHtml = chips.join('');
+
+                return `
+                    <tr class="new-entry">
+                        <td><span class="timestamp">${formatTimestamp(log.timestamp)}</span></td>
+                        <td>${getDecisionBadge(log.decision)}</td>
+                        <td><div class="text-truncate" title="${escapeHtml(log.prompt)}">${escapeHtml(log.prompt)}</div></td>
+                        <td><div class="text-truncate" title="${escapeHtml(log.response)}">${escapeHtml(log.response)}</div></td>
+                        <td><div class="scores-bar">${scoreHtml}</div></td>
+                        <td><div class="detail-text" title="${escapeHtml(log.detail)}">${escapeHtml(log.detail)}</div></td>
+                    </tr>`;
+            }).join('');
+        }
+
+        async function fetchStats() {
+            try {
+                const resp = await fetch(`${API_BASE}/api/stats`);
+                const data = await resp.json();
+                document.getElementById('stat-total').textContent = data.total || 0;
+                document.getElementById('stat-allowed').textContent = data.allowed || 0;
+                document.getElementById('stat-blocked').textContent = data.blocked || 0;
+                document.getElementById('stat-dropped').textContent = data.dropped || 0;
+                document.getElementById('stat-latency-average').textContent =
+                    formatLatency(data.average_total_latency_ms || 0);
+            } catch (e) {
+                console.warn('Failed to fetch stats:', e);
+            }
+        }
+
+        async function fetchConfig() {
+            try {
+                const resp = await fetch(`${API_BASE}/api/config`);
+                const data = await resp.json();
+                renderConfig(data);
+            } catch (e) {
+                console.warn('Failed to fetch runtime config:', e);
+            }
+        }
+
+        async function fetchLogs() {
+            try {
+                const resp = await fetch(`${API_BASE}/api/logs?limit=100`);
+                allLogs = await resp.json();
+                renderLogs();
+            } catch (e) {
+                console.warn('Failed to fetch logs:', e);
+            }
+        }
+
+        async function sendPrompt(event) {
+            event.preventDefault();
+
+            const promptField = document.getElementById('prompt-input');
+            const sendButton = document.getElementById('send-button');
+            const prompt = promptField.value.trim();
+
+            if (!prompt) {
+                setRequestStatus('Prompt Required', 'blocked');
+                document.getElementById('response-output').textContent = 'Enter a prompt before sending.';
+                return;
+            }
+
+            document.getElementById('response-prompt').textContent = prompt;
+            document.getElementById('response-output').textContent = 'Routing prompt through the firewall...';
+            setRequestStatus('Checking', 'loading');
+            sendButton.disabled = true;
+
+            try {
+                const resp = await fetch(`${API_BASE}/v1/chat/completions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: runtimeConfig?.default_model_id || FALLBACK_MODEL,
+                        messages: [{ role: 'user', content: prompt }],
+                    }),
+                });
+
+                const data = await resp.json();
+                if (!resp.ok) {
+                    throw new Error(data?.error?.message || 'Request failed');
+                }
+
+                const content = data?.choices?.[0]?.message?.content || 'No response returned.';
+                document.getElementById('response-output').textContent = content;
+
+                const refusalMessage = runtimeConfig?.refusal_message || 'Sorry, I cannot answer this prompt';
+                if (content === refusalMessage) {
+                    setRequestStatus('Blocked', 'blocked');
+                } else {
+                    setRequestStatus('Allowed', 'allowed');
+                }
+
+                await refreshData();
+            } catch (e) {
+                setRequestStatus('Error', 'blocked');
+                document.getElementById('response-output').textContent = e.message || 'Unexpected request failure.';
+            } finally {
+                sendButton.disabled = false;
+            }
+        }
+
+        async function refreshData() {
+            await Promise.all([fetchStats(), fetchLogs()]);
+        }
+
+        // Auto-refresh every 3 seconds
+        fetchConfig();
+        refreshData();
+        setInterval(refreshData, 3000);
+    </script>
+</body>
+</html>
