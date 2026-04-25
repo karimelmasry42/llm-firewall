@@ -5,10 +5,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
-from llm_firewall.api._processing import list_classifier_names
+from llm_firewall.api._processing import MAX_LOG_SIZE, list_classifier_names
 
 DASHBOARD_HTML_PATH = (
     Path(__file__).resolve().parents[2] / "dashboard" / "index.html"
@@ -37,6 +37,11 @@ def _compute_average_total_latency_ms(log: list[dict]) -> float:
 @router.get("/api/logs")
 async def get_logs(request: Request, limit: int = 50):
     """Return the most recent decision log entries."""
+    if limit < 1 or limit > MAX_LOG_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"`limit` must be between 1 and {MAX_LOG_SIZE}.",
+        )
     return request.app.state.decision_log[:limit]
 
 

@@ -4,6 +4,7 @@ OpenAI-compatible chat completion routes (single + batch) and model listing.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 import uuid
@@ -23,8 +24,26 @@ from llm_firewall.core.proxy import (
 logger = logging.getLogger("llm_firewall")
 MAX_BATCH_SIZE = 1000
 DEFAULT_BATCH_CONCURRENCY = 20
+MAX_BATCH_CONCURRENCY = 100
 
 router = APIRouter()
+
+
+async def _read_json_object(request: Request) -> tuple[dict | None, JSONResponse | None]:
+    """Parse a JSON object body or return a 400 response."""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError as exc:
+        return None, JSONResponse(
+            status_code=400,
+            content={"error": {"message": f"Invalid JSON body: {exc.msg}"}},
+        )
+    if not isinstance(body, dict):
+        return None, JSONResponse(
+            status_code=400,
+            content={"error": {"message": "Request body must be a JSON object."}},
+        )
+    return body, None
 
 
 def _build_model_object(model_id: str) -> dict:
@@ -57,7 +76,9 @@ async def chat_completions(request: Request):
     3. Run the assistant response through every output classifier.
     4. Return the response, or a refusal if any classifier blocks.
     """
-    body = await request.json()
+    body, error = await _read_json_object(request)
+    if error is not None:
+        return error
     auth_header = request.headers.get("Authorization", "")
     result = await process_chat_completion(request.app, body, auth_header)
     return JSONResponse(
@@ -117,7 +138,9 @@ async def chat_completions_batch(request: Request):
     Each prompt is wrapped into its own OpenAI-style request body and routed
     through the same firewall path as `/v1/chat/completions`.
     """
-    body = await request.json()
+    body, error = await _read_json_object(request)
+    if error is not None:
+        return error
     prompts = body.get("prompts")
     model = body.get("model", request.app.state.settings.default_model_id)
     system_message = body.get("system_message")
@@ -157,6 +180,12 @@ async def chat_completions_batch(request: Request):
         return JSONResponse(
             status_code=400,
             content={"error": {"message": "`concurrency` must be an integer greater than 0."}},
+        )
+
+    if concurrency > MAX_BATCH_CONCURRENCY:
+        return JSONResponse(
+            status_code=400,
+            content={"error": {"message": f"`concurrency` must not exceed {MAX_BATCH_CONCURRENCY}."}},
         )
 
     auth_header = request.headers.get("Authorization", "")

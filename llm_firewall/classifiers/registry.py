@@ -8,12 +8,23 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+import os
 from pathlib import Path
 import re
 
 TextPreprocessor = Callable[[str], str]
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MODELS_DIR = PROJECT_ROOT / "data" / "models"
+
+
+def _resolve_models_dir() -> Path:
+    """Resolve the models directory, honoring `LLM_FIREWALL_MODELS_DIR` if set."""
+    override = os.environ.get("LLM_FIREWALL_MODELS_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
+    return PROJECT_ROOT / "data" / "models"
+
+
+MODELS_DIR = _resolve_models_dir()
 
 
 def identity_preprocessor(text: str) -> str:
