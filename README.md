@@ -250,11 +250,13 @@ The default `DUMMY_LLM_RESPONSE_TEXT` currently passes with the shipped output c
 
 ### Routing logic
 
-The firewall is fail-closed:
+The firewall is fail-closed when output classifiers are enabled:
 
 - if the routed input classifier blocks, the request is stopped
 - if any output classifier blocks, the response is withheld
 - only fully approved requests and responses are returned (with PII masked when detected)
+
+When `LLM_FIREWALL_ENABLE_OUTPUT_CLASSIFIERS=false`, output validation is skipped entirely. Upstream responses are returned (still with PII masked) without that second check, and the decision detail is annotated `Output classifiers disabled`. Input validation always runs.
 
 ## Testing Instructions
 
