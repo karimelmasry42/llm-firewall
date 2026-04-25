@@ -1,18 +1,17 @@
-# PromptShield Router
+# LLM Firewall
 
-This repository is the codebase for our CyberChain Hackathon submission for Challenge 1 at the University of Salamanca and AASTMT. The project implements a simple LLM firewall that screens prompts before they reach an upstream model and screens model responses before they are shown to the user.
+This project The project implements a simple LLM firewall that screens prompts before they reach an upstream model and screens model responses before they are shown to the user.
 
 ## Team Members
 
 - Karim Elmasry
-- Mennatallah Wael
-- Abdelrhman Mohamed Abdelmoaty
-- Shahd Wagdy
-- Yosif Qassim
+- Ahmed Yasser
+- Omar Selim
+- Ammar Osama
 
 ## Hackathon Context
 
-Challenge 1 focuses on building a real-time semantic filtering layer for a black-box LLM. The firewall must detect malicious prompts such as prompt injection, jailbreak attempts, and system prompt extraction attempts using only the model inputs and outputs.
+This challenge focuses on building a real-time semantic filtering layer for a black-box LLM. The firewall must detect malicious prompts such as prompt injection, jailbreak attempts, and system prompt extraction attempts using only the model inputs and outputs.
 
 ## Project Overview
 
