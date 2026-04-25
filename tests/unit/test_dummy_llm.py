@@ -3,7 +3,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from llm_firewall.dummy_llm import DummyLLMSettings, create_dummy_llm_app
+from llm_firewall.api.dummy_llm import DummyLLMSettings, create_dummy_llm_app
 
 
 class TestDummyLLM:

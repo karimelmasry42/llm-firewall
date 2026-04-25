@@ -2,7 +2,7 @@
 import pytest
 import httpx
 import respx
-from llm_firewall.proxy import (
+from llm_firewall.core.proxy import (
     _derive_upstream_api_base,
     forward_to_llm,
     list_upstream_models,

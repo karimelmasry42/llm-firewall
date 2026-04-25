@@ -12,7 +12,8 @@ from pathlib import Path
 import re
 
 TextPreprocessor = Callable[[str], str]
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+MODELS_DIR = PROJECT_ROOT / "data" / "models"
 
 
 def identity_preprocessor(text: str) -> str:
@@ -68,12 +69,12 @@ class ClassifierSpec:
 INPUT_CLASSIFIER_SPECS = [
     ClassifierSpec(
         name="linear_svm_input_classifier",
-        path=PROJECT_ROOT / "models" / "input" / "linear_svm_input_classifier.pkl",
+        path=MODELS_DIR / "linear_svm_input_classifier.pkl",
         preprocess=preprocess_injection_text,
     ),
     ClassifierSpec(
         name="linear_svm_spanish",
-        path=PROJECT_ROOT / "models" / "input" / "linear_svm_spanish.pkl",
+        path=MODELS_DIR / "linear_svm_spanish.pkl",
         preprocess=normalize_whitespace,
     ),
 ]

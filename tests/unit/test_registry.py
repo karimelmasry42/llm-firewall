@@ -1,6 +1,9 @@
 """Tests for hard-coded classifier preprocessing in the model registry."""
 
-from llm_firewall.model_registry import get_output_classifier_specs, preprocess_injection_text
+from llm_firewall.classifiers.registry import (
+    get_output_classifier_specs,
+    preprocess_injection_text,
+)
 
 
 def test_preprocess_injection_text_marks_attack_patterns():

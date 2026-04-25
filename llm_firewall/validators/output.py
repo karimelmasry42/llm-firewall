@@ -3,8 +3,8 @@ Output Validator — runs every explicitly configured output classifier.
 """
 from collections.abc import Sequence
 
-from llm_firewall.classifiers import ClassifierEnsemble, EnsembleValidationResult
-from llm_firewall.model_registry import ClassifierSpec, get_output_classifier_specs
+from llm_firewall.classifiers.ensemble import ClassifierEnsemble, EnsembleValidationResult
+from llm_firewall.classifiers.registry import ClassifierSpec, get_output_classifier_specs
 
 ValidationResult = EnsembleValidationResult
 

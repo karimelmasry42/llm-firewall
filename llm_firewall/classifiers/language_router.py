@@ -29,7 +29,7 @@ _SPANISH_HINT_WORDS = {
 }
 _SPANISH_MARKERS = set("áéíóúñ¿¡")
 _DEFAULT_FASTTEXT_MODEL_PATH = (
-    Path(__file__).resolve().parent.parent / "lid.176.bin"
+    Path(__file__).resolve().parents[2] / "lid.176.bin"
 )
 _FASTTEXT_MODEL_PATH_ENV = "LLM_FIREWALL_LANGUAGE_ROUTER_FASTTEXT_PATH"
 

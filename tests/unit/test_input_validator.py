@@ -1,7 +1,7 @@
 """Tests for the input classifier ensemble."""
 import pytest
 
-from llm_firewall.validators.input_validator import InputValidator
+from llm_firewall.validators.input import InputValidator
 
 
 class TestInputValidator:

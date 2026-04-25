@@ -1,11 +1,11 @@
 """Tests for the input language router."""
 
-from llm_firewall.language_router import detect_language, route_input_text
+from llm_firewall.classifiers.language_router import detect_language, route_input_text
 
 
 def test_detect_language_uses_lingua_for_short_spanish(monkeypatch):
     monkeypatch.setattr(
-        "llm_firewall.language_router.detect_with_lingua",
+        "llm_firewall.classifiers.language_router.detect_with_lingua",
         lambda _text: ("es", 0.92),
     )
 
@@ -16,7 +16,7 @@ def test_detect_language_uses_lingua_for_short_spanish(monkeypatch):
 
 def test_detect_language_uses_fasttext_for_long_english(monkeypatch):
     monkeypatch.setattr(
-        "llm_firewall.language_router.detect_with_fasttext",
+        "llm_firewall.classifiers.language_router.detect_with_fasttext",
         lambda _text: ("en", 0.88),
     )
 
@@ -33,7 +33,7 @@ def test_detect_language_falls_back_when_input_has_no_alpha():
 
 def test_route_input_text_uses_spanish_filter(monkeypatch):
     monkeypatch.setattr(
-        "llm_firewall.language_router.detect_language",
+        "llm_firewall.classifiers.language_router.detect_language",
         lambda _text, **_kwargs: {"lang": "es", "confidence": 0.99, "method": "lingua"},
     )
 
@@ -49,7 +49,7 @@ def test_route_input_text_uses_spanish_filter(monkeypatch):
 
 def test_route_input_text_keeps_english_filter(monkeypatch):
     monkeypatch.setattr(
-        "llm_firewall.language_router.detect_language",
+        "llm_firewall.classifiers.language_router.detect_language",
         lambda _text, **_kwargs: {"lang": "en", "confidence": 0.85, "method": "fasttext"},
     )
 

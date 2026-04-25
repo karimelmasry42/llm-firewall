@@ -1,6 +1,6 @@
 """Tests for regex-based PII masking."""
 
-from llm_firewall.pii_filter import mask_pii
+from llm_firewall.filters.pii import mask_pii
 
 
 def test_mask_pii_masks_multiple_entity_types():

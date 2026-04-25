@@ -1,7 +1,7 @@
 """Tests for the output classifier ensemble."""
 import pytest
 
-from llm_firewall.validators.output_validator import OutputValidator
+from llm_firewall.validators.output import OutputValidator
 
 
 class TestOutputValidator:

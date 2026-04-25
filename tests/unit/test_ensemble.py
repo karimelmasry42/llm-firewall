@@ -3,13 +3,13 @@ import pickle
 
 import joblib
 
-from llm_firewall.classifiers import PickleClassifier
-from llm_firewall.huggingface_toxicity import (
+from llm_firewall.classifiers.huggingface import (
     TinyToxicDetectorClassifier,
     TinyTransformerConfig,
     _align_config_with_state_dict,
 )
-from llm_firewall.model_registry import ClassifierSpec
+from llm_firewall.classifiers.pickle_classifier import PickleClassifier
+from llm_firewall.classifiers.registry import ClassifierSpec
 from tests.fake_models import KeywordPipeline
 
 

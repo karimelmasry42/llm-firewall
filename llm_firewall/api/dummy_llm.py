@@ -82,3 +82,15 @@ def create_dummy_llm_app(settings: DummyLLMSettings | None = None) -> FastAPI:
 
 
 app = create_dummy_llm_app()
+
+
+def run() -> None:
+    """Console-script entry point for `llm-firewall-dummy`."""
+    import uvicorn
+
+    uvicorn.run(
+        "llm_firewall.api.dummy_llm:app",
+        host="0.0.0.0",
+        port=9000,
+        reload=False,
+    )

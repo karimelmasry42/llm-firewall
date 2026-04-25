@@ -9,9 +9,9 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from llm_firewall.config import Settings
-from llm_firewall.main import create_app
-from llm_firewall.model_registry import ClassifierSpec, identity_preprocessor
+from llm_firewall.api.app import create_app
+from llm_firewall.classifiers.registry import ClassifierSpec, identity_preprocessor
+from llm_firewall.core.config import Settings
 from tests.fake_models import KeywordClassifier, KeywordVectorizer
 
 

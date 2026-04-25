@@ -1,6 +1,6 @@
 """Tests for the Toxicity ML filter."""
 import pytest
-from llm_firewall.filters.toxicity_filter import ToxicityFilter
+from llm_firewall.filters.toxicity import ToxicityFilter
 
 
 class TestToxicityFilter:

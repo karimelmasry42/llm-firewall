@@ -1,7 +1,7 @@
 """Tests for shared environment configuration loading."""
 from pathlib import Path
 
-from llm_firewall.config import Settings
+from llm_firewall.core.config import Settings
 
 
 def test_firewall_settings_ignore_dummy_keys_in_shared_env_file(tmp_path):

@@ -7,8 +7,8 @@ import json
 from dataclasses import dataclass, replace
 from time import perf_counter
 
+from llm_firewall.classifiers.registry import ClassifierSpec
 from llm_firewall.filters import FilterResult
-from llm_firewall.model_registry import ClassifierSpec
 
 
 @dataclass(frozen=True)
