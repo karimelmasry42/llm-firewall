@@ -21,11 +21,11 @@ Request flow:
 
 1. The user submits a prompt from the dashboard or through the API.
 2. A language router classifies the prompt as English or Spanish: for longer prompts it uses `fasttext` when the `lid.176.bin` model is available, for shorter prompts it uses `lingua`, and if detectors are unavailable or confidence is low it falls back to heuristics or the English route. Unsupported languages fall back to the English route.
-3. The firewall runs the prompt through the input classifier(s) registered for that language in `llm_firewall/model_registry.py`.
+3. The firewall runs the prompt through the input classifier(s) registered for that language in `llm_firewall/classifiers/registry.py`.
 4. If the input classifier blocks, the API returns: `Sorry, I cannot answer this prompt`.
 5. If the input passes, the request is forwarded to the configured upstream LLM URL.
 6. The upstream response is run through a regex PII masker that replaces emails, phone numbers, URLs, credit cards, API keys, private keys, and similar entities with `*` characters in place.
-7. The masked response is then checked by every output classifier registered in `llm_firewall/model_registry.py` (skipped entirely if `LLM_FIREWALL_ENABLE_OUTPUT_CLASSIFIERS=false`).
+7. The masked response is then checked by every output classifier registered in `llm_firewall/classifiers/registry.py` (skipped entirely if `LLM_FIREWALL_ENABLE_OUTPUT_CLASSIFIERS=false`).
 8. If any output classifier blocks, the same refusal message is returned. Otherwise the (possibly masked) response is returned to the caller.
 
 A batch testing endpoint at `/v1/chat/completions/batch` accepts up to 1000 prompts in one request. For local end-to-end testing, the repository includes a dummy upstream LLM that always replies with a fixed configurable message.
@@ -34,12 +34,12 @@ A batch testing endpoint at `/v1/chat/completions/batch` accepts up to 1000 prom
 
 | Stage | Component (label in logs/dashboard) | Source |
 |---|---|---|
-| Input (English route) | `linear_svm_input_classifier` | `models/input/linear_svm_input_classifier.pkl` |
-| Input (Spanish route) | `linear_svm_spanish` | `models/input/linear_svm_spanish.pkl` |
-| Response masking | regex PII masker (always on) | `llm_firewall/pii_filter.py` |
+| Input (English route) | `linear_svm_input_classifier` | `data/models/linear_svm_input_classifier.pkl` |
+| Input (Spanish route) | `linear_svm_spanish` | `data/models/linear_svm_spanish.pkl` |
+| Response masking | regex PII masker (always on) | `llm_firewall/filters/pii.py` |
 | Output | `Tiny-Toxic-Detector` | Hugging Face: `AssistantsLab/Tiny-Toxic-Detector` |
 
-Update [llm_firewall/model_registry.py](llm_firewall/model_registry.py) when you add, remove, or replace classifiers. Each entry defines the label shown in logs and the dashboard (`display_name` when set, otherwise `name`), the pickle path or Hugging Face id, and the preprocessing function applied before prediction.
+Update [llm_firewall/classifiers/registry.py](llm_firewall/classifiers/registry.py) when you add, remove, or replace classifiers. Each entry defines the label shown in logs and the dashboard (`display_name` when set, otherwise `name`), the pickle path or Hugging Face id, and the preprocessing function applied before prediction.
 
 ## Setup Instructions
 
@@ -50,13 +50,16 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-### 2. Install dependencies
+### 2. Install the package
 
 ```bash
-pip install -r requirements.txt
+make install      # equivalent to: pip install -e ".[dev]"
 ```
 
-This installs `torch`, `transformers`, and `huggingface-hub` for the Hugging Face output classifier, plus `fasttext-wheel` and `lingua-language-detector` for the input language router.
+This installs the firewall in editable mode together with the development extras
+(`pytest`, `pytest-asyncio`, `respx`). The base dependencies pull in `torch`,
+`transformers`, and `huggingface-hub` for the Hugging Face output classifier, plus
+`fasttext-wheel` and `lingua-language-detector` for the input language router.
 
 ### 3. Configure runtime settings
 
@@ -85,7 +88,7 @@ Shell exports also work — use `export VAR=...` (bash/zsh), `$env:VAR=...` (Pow
 ### 4. Run the server
 
 ```bash
-uvicorn llm_firewall.main:app --reload --port 8000
+make run          # equivalent to: uvicorn llm_firewall.api.app:app --reload --port 8000
 ```
 
 If `LLM_FIREWALL_ENABLE_OUTPUT_CLASSIFIERS=true`, the first startup downloads the Hugging Face output model into the local cache.
@@ -212,12 +215,12 @@ Sample input lives at [examples/batch_prompts.json](examples/batch_prompts.json)
 
 ### Local Dummy LLM
 
-A local OpenAI-compatible upstream lives at [llm_firewall/dummy_llm.py](llm_firewall/dummy_llm.py). It exposes `POST /v1/chat/completions` and `GET /health`, ignores the prompt content, and always returns the assistant message from `DUMMY_LLM_RESPONSE_TEXT` (default `This is a dummy response.`).
+A local OpenAI-compatible upstream lives at [llm_firewall/api/dummy_llm.py](llm_firewall/api/dummy_llm.py). It exposes `POST /v1/chat/completions` and `GET /health`, ignores the prompt content, and always returns the assistant message from `DUMMY_LLM_RESPONSE_TEXT` (default `This is a dummy response.`).
 
 Run it on a separate port:
 
 ```bash
-uvicorn llm_firewall.dummy_llm:app --reload --port 9000
+make dummy        # equivalent to: uvicorn llm_firewall.api.dummy_llm:app --reload --port 9000
 ```
 
 Then point the firewall at it:
@@ -233,19 +236,45 @@ The default `DUMMY_LLM_RESPONSE_TEXT` currently passes with the shipped output c
 
 ## Architecture
 
+### Repository layout
+
+```
+llm-firewall/
+├── llm_firewall/
+│   ├── api/                FastAPI app, routes, dashboard, dummy upstream
+│   ├── core/               Settings + outbound HTTP proxy
+│   ├── classifiers/        Registry, ensemble, language router, model backends
+│   ├── filters/            FilterResult primitive + PII / toxicity filters
+│   └── validators/         InputValidator / OutputValidator wrappers
+├── data/models/            Pre-trained classifier artifacts (.pkl)
+├── dashboard/              Single-page monitoring UI
+├── examples/               Sample batch payloads
+├── scripts/                Standalone simulation script
+├── tests/
+│   ├── unit/               Single-module tests
+│   └── integration/        End-to-end tests against the FastAPI app
+├── pyproject.toml
+├── Makefile
+└── README.md
+```
+
 ### Core components
 
-- [llm_firewall/main.py](llm_firewall/main.py) — FastAPI app, request flow, batch endpoint, dashboard and stats endpoints, and in-memory decision log.
-- [llm_firewall/config.py](llm_firewall/config.py) — `Settings` loaded from `.env` and the environment.
-- [llm_firewall/language_router.py](llm_firewall/language_router.py) — routes English vs Spanish input via fasttext, lingua, and a heuristic fallback.
-- [llm_firewall/model_registry.py](llm_firewall/model_registry.py) — hard-coded classifier specs grouped by language for input and as a flat list for output.
-- [llm_firewall/classifiers.py](llm_firewall/classifiers.py) — loads each classifier (pickle or HF backend), runs classification, and aggregates scores.
-- [llm_firewall/huggingface_toxicity.py](llm_firewall/huggingface_toxicity.py) — Hugging Face backend used by the `Tiny-Toxic-Detector` output classifier.
-- [llm_firewall/validators/input_validator.py](llm_firewall/validators/input_validator.py) — wraps the per-language input classifier ensemble; one instance per routed language.
-- [llm_firewall/validators/output_validator.py](llm_firewall/validators/output_validator.py) — wraps the output classifier ensemble.
-- [llm_firewall/pii_filter.py](llm_firewall/pii_filter.py) — regex PII masker applied to every upstream response before output validation.
-- [llm_firewall/proxy.py](llm_firewall/proxy.py) — forwards approved requests to the upstream LLM endpoint and proxies `/v1/models`.
-- [llm_firewall/dummy_llm.py](llm_firewall/dummy_llm.py) — local fixed-response upstream for end-to-end testing.
+- [llm_firewall/api/app.py](llm_firewall/api/app.py) — FastAPI application factory and lifecycle wiring.
+- [llm_firewall/api/routes.py](llm_firewall/api/routes.py) — chat completions, model listing, and batch endpoints.
+- [llm_firewall/api/dashboard.py](llm_firewall/api/dashboard.py) — dashboard, decision-log, stats, config, and health endpoints.
+- [llm_firewall/api/_processing.py](llm_firewall/api/_processing.py) — single-prompt firewall flow shared by single + batch routes.
+- [llm_firewall/api/dummy_llm.py](llm_firewall/api/dummy_llm.py) — local fixed-response upstream for end-to-end testing.
+- [llm_firewall/core/config.py](llm_firewall/core/config.py) — `Settings` loaded from `.env` and the environment.
+- [llm_firewall/core/proxy.py](llm_firewall/core/proxy.py) — forwards approved requests to the upstream LLM endpoint and proxies `/v1/models`.
+- [llm_firewall/classifiers/language_router.py](llm_firewall/classifiers/language_router.py) — routes English vs Spanish input via fasttext, lingua, and a heuristic fallback.
+- [llm_firewall/classifiers/registry.py](llm_firewall/classifiers/registry.py) — hard-coded classifier specs grouped by language for input and as a flat list for output.
+- [llm_firewall/classifiers/ensemble.py](llm_firewall/classifiers/ensemble.py) — runs every configured classifier and aggregates scores.
+- [llm_firewall/classifiers/pickle_classifier.py](llm_firewall/classifiers/pickle_classifier.py) — sklearn-style pickle/joblib bundle backend.
+- [llm_firewall/classifiers/huggingface.py](llm_firewall/classifiers/huggingface.py) — Hugging Face backend used by the `Tiny-Toxic-Detector` output classifier.
+- [llm_firewall/validators/input.py](llm_firewall/validators/input.py) — wraps the per-language input classifier ensemble; one instance per routed language.
+- [llm_firewall/validators/output.py](llm_firewall/validators/output.py) — wraps the output classifier ensemble.
+- [llm_firewall/filters/pii.py](llm_firewall/filters/pii.py) — regex PII masker (and `PiiFilter` detection class) applied to every upstream response before output validation.
 - [dashboard/index.html](dashboard/index.html) — UI for prompt submission, response display, and live monitoring.
 
 ### Routing logic
@@ -260,19 +289,19 @@ When `LLM_FIREWALL_ENABLE_OUTPUT_CLASSIFIERS=false`, output validation is skippe
 
 ## Testing Instructions
 
-Install the dependencies first, then run:
+Install the package first (`make install`), then run:
 
 ```bash
-python3 -m pytest -q
+make test         # equivalent to: pytest
 ```
 
 Targeted suites:
 
 ```bash
-python3 -m pytest tests/test_integration.py -q   # end-to-end API + batch coverage
-python3 -m pytest tests/test_dummy_llm.py -q     # dummy upstream
-python3 -m pytest tests/test_language_router.py -q
-python3 -m pytest tests/test_pii_filter.py -q
+pytest tests/integration/test_integration.py -q   # end-to-end API + batch coverage
+pytest tests/unit/test_dummy_llm.py -q            # dummy upstream
+pytest tests/unit/test_language_router.py -q
+pytest tests/unit/test_pii_filter.py -q
 ```
 
 Fast syntax check:

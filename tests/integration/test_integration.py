@@ -14,7 +14,7 @@ class TestIntegration:
         input_classifier_specs_by_language,
         output_classifier_specs,
     ):
-        from llm_firewall.main import create_app
+        from llm_firewall.api.app import create_app
 
         app = create_app(
             settings=firewall_settings,
@@ -149,12 +149,12 @@ class TestIntegration:
         assert response.json()["data"][0]["id"] == "gpt-4o-mini"
 
     def test_models_endpoint_falls_back_to_local_model_list(self, client, monkeypatch):
-        import llm_firewall.main as main_module
+        from llm_firewall.api import routes as routes_module
 
         async def raise_upstream_error(**_kwargs):
             raise RuntimeError("upstream models unavailable")
 
-        monkeypatch.setattr(main_module, "list_upstream_models", raise_upstream_error)
+        monkeypatch.setattr(routes_module, "list_upstream_models", raise_upstream_error)
 
         response = client.get("/v1/models")
 
@@ -182,12 +182,12 @@ class TestIntegration:
         assert response.json()["id"] == "gpt-4o-mini"
 
     def test_model_retrieve_endpoint_falls_back_to_requested_model_id(self, client, monkeypatch):
-        import llm_firewall.main as main_module
+        from llm_firewall.api import routes as routes_module
 
         async def raise_upstream_error(**_kwargs):
             raise RuntimeError("upstream model unavailable")
 
-        monkeypatch.setattr(main_module, "retrieve_upstream_model", raise_upstream_error)
+        monkeypatch.setattr(routes_module, "retrieve_upstream_model", raise_upstream_error)
 
         response = client.get("/v1/models/custom-model")
 
@@ -202,8 +202,8 @@ class TestIntegration:
         sample_openai_response,
     ):
         from fastapi.testclient import TestClient
-        from llm_firewall.config import Settings
-        from llm_firewall.main import create_app
+        from llm_firewall.api.app import create_app
+        from llm_firewall.core.config import Settings
 
         app = create_app(
             settings=Settings(
@@ -317,8 +317,8 @@ class TestIntegration:
         toxic_openai_response,
     ):
         from fastapi.testclient import TestClient
-        from llm_firewall.config import Settings
-        from llm_firewall.main import create_app
+        from llm_firewall.api.app import create_app
+        from llm_firewall.core.config import Settings
 
         app = create_app(
             settings=Settings(
@@ -387,12 +387,12 @@ class TestIntegration:
         assert "Prompt Router" in response.text
 
     def test_input_model_load_error_returns_structured_json(self, client, monkeypatch):
-        import llm_firewall.main as main_module
+        from llm_firewall.api import _processing
 
         def raise_model_error(_app, _language="en"):
             raise ValueError("broken input classifier")
 
-        monkeypatch.setattr(main_module, "_get_input_validator", raise_model_error)
+        monkeypatch.setattr(_processing, "get_input_validator", raise_model_error)
 
         response = client.post(
             "/v1/chat/completions",
