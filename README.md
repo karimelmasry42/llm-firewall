@@ -20,7 +20,7 @@ The application exposes an OpenAI-compatible `/v1/chat/completions` endpoint and
 Request flow:
 
 1. The user submits a prompt from the dashboard or through the API.
-2. A language router classifies the prompt as English or Spanish (fasttext → lingua → heuristic fallback). Unsupported languages fall back to the English route.
+2. A language router classifies the prompt as English or Spanish: for longer prompts it uses `fasttext` when the `lid.176.bin` model is available, for shorter prompts it uses `lingua`, and if detectors are unavailable or confidence is low it falls back to heuristics or the English route. Unsupported languages fall back to the English route.
 3. The firewall runs the prompt through the input classifier(s) registered for that language in `llm_firewall/model_registry.py`.
 4. If the input classifier blocks, the API returns: `Sorry, I cannot answer this prompt`.
 5. If the input passes, the request is forwarded to the configured upstream LLM URL.
