@@ -32,14 +32,14 @@ A batch testing endpoint at `/v1/chat/completions/batch` accepts up to 1000 prom
 
 ### Classifiers and filters
 
-| Stage | Component | Source |
+| Stage | Component (label in logs/dashboard) | Source |
 |---|---|---|
 | Input (English route) | `linear_svm_input_classifier` | `models/input/linear_svm_input_classifier.pkl` |
 | Input (Spanish route) | `linear_svm_spanish` | `models/input/linear_svm_spanish.pkl` |
 | Response masking | regex PII masker (always on) | `llm_firewall/pii_filter.py` |
-| Output | `tiny_toxic_detector` | Hugging Face: `AssistantsLab/Tiny-Toxic-Detector` |
+| Output | `Tiny-Toxic-Detector` | Hugging Face: `AssistantsLab/Tiny-Toxic-Detector` |
 
-Update [llm_firewall/model_registry.py](llm_firewall/model_registry.py) when you add, remove, or replace classifiers. Each entry defines the model name shown in logs and the dashboard, the pickle path or Hugging Face id, and the preprocessing function applied before prediction.
+Update [llm_firewall/model_registry.py](llm_firewall/model_registry.py) when you add, remove, or replace classifiers. Each entry defines the label shown in logs and the dashboard (`display_name` when set, otherwise `name`), the pickle path or Hugging Face id, and the preprocessing function applied before prediction.
 
 ## Setup Instructions
 
@@ -68,17 +68,17 @@ Copy the example file and edit:
 cp .env.example .env
 ```
 
-Environment variables (prefix `LLM_FIREWALL_`):
+Environment variables:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `UPSTREAM_CHAT_COMPLETIONS_URL` | `https://api.openai.com/v1/chat/completions` | Upstream LLM endpoint |
-| `UPSTREAM_API_KEY` | `""` | Server-side upstream key. If empty, the firewall forwards the caller's bearer token. |
-| `DEFAULT_MODEL_ID` | `firewall-demo` | Default model name returned to clients |
-| `ENABLE_OUTPUT_CLASSIFIERS` | `true` | Set to `false` to skip output validation entirely |
-| `REFUSAL_MESSAGE` | `Sorry, I cannot answer this prompt` | Returned when input or output is blocked |
+| `LLM_FIREWALL_UPSTREAM_CHAT_COMPLETIONS_URL` | `https://api.openai.com/v1/chat/completions` | Upstream LLM endpoint |
+| `LLM_FIREWALL_UPSTREAM_API_KEY` | `""` | Server-side upstream key. If empty, the firewall forwards the caller's bearer token. |
+| `LLM_FIREWALL_DEFAULT_MODEL_ID` | `firewall-demo` | Default model name returned to clients |
+| `LLM_FIREWALL_ENABLE_OUTPUT_CLASSIFIERS` | `true` | Set to `false` to skip output validation entirely |
+| `LLM_FIREWALL_REFUSAL_MESSAGE` | `Sorry, I cannot answer this prompt` | Returned when input or output is blocked |
 
-Optional dummy-upstream variables (prefix `DUMMY_LLM_`): `DUMMY_LLM_API_KEY`, `DUMMY_LLM_RESPONSE_TEXT`. See `.env.example` for the canonical list and shipped defaults (which target Google Gemini's OpenAI-compatible endpoint).
+Optional dummy-upstream variables: `DUMMY_LLM_API_KEY`, `DUMMY_LLM_RESPONSE_TEXT`. See `.env.example` for the canonical list and shipped defaults (which target Google Gemini's OpenAI-compatible endpoint).
 
 Shell exports also work — use `export VAR=...` (bash/zsh), `$env:VAR=...` (PowerShell), or `set VAR=...` (cmd) for the same variable names.
 
@@ -88,7 +88,7 @@ Shell exports also work — use `export VAR=...` (bash/zsh), `$env:VAR=...` (Pow
 uvicorn llm_firewall.main:app --reload --port 8000
 ```
 
-The first startup downloads the Hugging Face output model into the local cache.
+If `LLM_FIREWALL_ENABLE_OUTPUT_CLASSIFIERS=true`, the first startup downloads the Hugging Face output model into the local cache.
 
 ## Usage Guide
 
@@ -108,7 +108,7 @@ The firewall keeps a lightweight in-memory decision log inside the running FastA
 - timestamp and short log entry id
 - original prompt and returned response (or refusal message)
 - final decision: `ALLOWED`, `BLOCKED`, `DROPPED`, or `ERROR`
-- per-model scores and latencies, prefixed with `input:<name>`, `output:<name>`, plus a synthetic `input:Language Router` entry
+- per-model scores and latencies, prefixed with `input:<name>` and `output:<name>`, where `<name>` is the classifier's dashboard/log display name (for example, `output:Tiny-Toxic-Detector`), plus a synthetic `input:Language Router` entry
 - detail text and an optional `failed_filters` list when a classifier blocks
 
 Behavior:
@@ -229,7 +229,7 @@ DUMMY_LLM_API_KEY=
 DUMMY_LLM_RESPONSE_TEXT="This is a dummy response."
 ```
 
-The default `DUMMY_LLM_RESPONSE_TEXT` is chosen to pass the current output classifiers. To require auth instead, set the same shared secret in both `LLM_FIREWALL_UPSTREAM_API_KEY` and `DUMMY_LLM_API_KEY` — the firewall will use its server-side key (see "OpenAI SDK Compatibility" above for the auth fallback rule).
+The default `DUMMY_LLM_RESPONSE_TEXT` currently passes with the shipped output classifiers. To require auth instead, set the same shared secret in both `LLM_FIREWALL_UPSTREAM_API_KEY` and `DUMMY_LLM_API_KEY` — the firewall will use its server-side key (see "OpenAI SDK Compatibility" above for the auth fallback rule).
 
 ## Architecture
 
@@ -240,7 +240,7 @@ The default `DUMMY_LLM_RESPONSE_TEXT` is chosen to pass the current output class
 - [llm_firewall/language_router.py](llm_firewall/language_router.py) — routes English vs Spanish input via fasttext, lingua, and a heuristic fallback.
 - [llm_firewall/model_registry.py](llm_firewall/model_registry.py) — hard-coded classifier specs grouped by language for input and as a flat list for output.
 - [llm_firewall/classifiers.py](llm_firewall/classifiers.py) — loads each classifier (pickle or HF backend), runs classification, and aggregates scores.
-- [llm_firewall/huggingface_toxicity.py](llm_firewall/huggingface_toxicity.py) — Hugging Face backend used by the `tiny_toxic_detector` output classifier.
+- [llm_firewall/huggingface_toxicity.py](llm_firewall/huggingface_toxicity.py) — Hugging Face backend used by the `Tiny-Toxic-Detector` output classifier.
 - [llm_firewall/validators/input_validator.py](llm_firewall/validators/input_validator.py) — wraps the per-language input classifier ensemble; one instance per routed language.
 - [llm_firewall/validators/output_validator.py](llm_firewall/validators/output_validator.py) — wraps the output classifier ensemble.
 - [llm_firewall/pii_filter.py](llm_firewall/pii_filter.py) — regex PII masker applied to every upstream response before output validation.
