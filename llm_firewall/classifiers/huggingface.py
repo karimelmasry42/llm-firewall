@@ -9,7 +9,7 @@ Two runtimes live here:
 * `HFSequenceClassifier` — generic wrapper around any
   `AutoModelForSequenceClassification` checkpoint on the Hub. Intended for
   off-the-shelf prompt-injection classifiers (e.g.
-  `meta-llama/Prompt-Guard-2-86M`).
+  `meta-llama/Llama-Prompt-Guard-2-86M`).
 
 Both implement the same firewall-internal contract: take a `ClassifierSpec`,
 expose `evaluate(text) -> FilterResult`, and let `ClassifierEnsemble`
@@ -267,7 +267,7 @@ class HFSequenceClassifier:
       this when you know the exact index (e.g., 1 for typical binary
       checkpoints).
     * `injection_label_name`: case-insensitive label string. Looked up in
-      `id2label`. Useful for multi-label models like Prompt-Guard-2 where
+      `id2label`. Useful for multi-label models like Llama-Prompt-Guard-2 where
       one of several labels means "block."
 
     If neither is set we fall back to: index 1 for 2-class models, otherwise

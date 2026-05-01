@@ -68,7 +68,7 @@ collapsing.
 
 ## How we read the numbers
 
-When comparing two classifiers (e.g. SVM baseline vs Prompt-Guard-2):
+When comparing two classifiers (e.g. SVM baseline vs Llama-Prompt-Guard-2):
 
 1. **Look at recall on the in-distribution test set first.** If recall is
    below where the baseline already sits, the new model is worse at the
@@ -91,7 +91,7 @@ When comparing two classifiers (e.g. SVM baseline vs Prompt-Guard-2):
 
 We promote *any* off-the-shelf candidate (the bake-off considered
 `protectai/deberta-v3-base-prompt-injection-v2` and
-`meta-llama/Prompt-Guard-2-86M`) over the SVM only if all of the
+`meta-llama/Llama-Prompt-Guard-2-86M`) over the SVM only if all of the
 following hold:
 
 - **F1 ≥ 0.85** on `in_distribution_test`.
@@ -106,8 +106,10 @@ If those don't hold, we move to Phase 4 (train a frozen-embedder + head).
 
 The shipped v1 winner is `protectai/deberta-v3-base-prompt-injection-v2`
 (it cleared all three criteria, see [`models.md`](models.md#decision-applied)).
-`meta-llama/Prompt-Guard-2-86M` is gated and remains a candidate for
-re-evaluation once HF authentication is set up.
+`meta-llama/Llama-Prompt-Guard-2-86M` was evaluated after license
+acceptance — at the default threshold its F1 is below protectai's, but
+it has higher held-out ROC-AUC and PR-AUC, so it remains a
+threshold-tuning follow-up candidate.
 
 ## Reproducing the numbers
 

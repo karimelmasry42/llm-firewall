@@ -111,20 +111,20 @@ def _build_svm_baseline_spanish() -> ClassifierLike:
 
 
 def _build_prompt_guard_2() -> ClassifierLike:
-    """Adapter for meta-llama/Prompt-Guard-2-86M via HFSequenceClassifier.
+    """Adapter for meta-llama/Llama-Prompt-Guard-2-86M via HFSequenceClassifier.
 
     NOTE: This model is gated. Before running you must accept the license at
-    https://huggingface.co/meta-llama/Prompt-Guard-2-86M and authenticate via
-    `huggingface-cli login`.
+    https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M and
+    authenticate via `huggingface-cli login`.
     """
     from llm_firewall.classifiers.huggingface import HFSequenceClassifier
     from llm_firewall.classifiers.registry import ClassifierSpec, normalize_whitespace
 
     spec = ClassifierSpec(
-        name="prompt_guard_2_86m",
-        display_name="Prompt-Guard-2-86M",
+        name="llama_prompt_guard_2_86m",
+        display_name="Llama-Prompt-Guard-2-86M",
         backend="huggingface_sequence",
-        model_id="meta-llama/Prompt-Guard-2-86M",
+        model_id="meta-llama/Llama-Prompt-Guard-2-86M",
         preprocess=normalize_whitespace,
         threshold=0.5,
         max_length=512,

@@ -101,7 +101,7 @@ class ClassifierSpec:
 # operated on regex tag-substituted text and had no semantic understanding.
 # See docs/input_classifier/ for the dataset/eval/model bake-off that
 # justified this choice. To swap models (e.g. once
-# meta-llama/Prompt-Guard-2-86M is approved + authenticated), replace the
+# meta-llama/Llama-Prompt-Guard-2-86M is approved + authenticated), replace the
 # spec below — the runtime is generic.
 INPUT_CLASSIFIER_SPECS = [
     ClassifierSpec(

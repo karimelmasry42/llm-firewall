@@ -67,7 +67,7 @@ python scripts/input_classifier/evaluate.py --classifier svm_baseline_spanish
 # protectai/deberta-v3-base-prompt-injection-v2 (currently shipped).
 python scripts/input_classifier/evaluate.py --classifier protectai_deberta
 
-# meta-llama/Prompt-Guard-2-86M — requires HF auth (see below).
+# meta-llama/Llama-Prompt-Guard-2-86M — requires HF auth (see below).
 python scripts/input_classifier/evaluate.py --classifier prompt_guard_2
 ```
 
@@ -82,11 +82,11 @@ To smoke-test on a small slice:
 python scripts/input_classifier/evaluate.py --classifier protectai_deberta --limit 50
 ```
 
-## Authenticating for `meta-llama/Prompt-Guard-2-86M`
+## Authenticating for `meta-llama/Llama-Prompt-Guard-2-86M`
 
-Prompt-Guard-2 is a gated Meta model:
+Llama-Prompt-Guard-2 is a gated Meta model:
 
-1. Visit https://huggingface.co/meta-llama/Prompt-Guard-2-86M and accept
+1. Visit https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M and accept
    the license (usually instant approval).
 2. Create a HuggingFace access token at https://huggingface.co/settings/tokens
    with at least `read` scope.
@@ -103,7 +103,7 @@ Prompt-Guard-2 is a gated Meta model:
    python scripts/input_classifier/evaluate.py --classifier prompt_guard_2
    ```
 
-5. Compare the new report to `protectai_deberta.json`. If Prompt-Guard-2
+5. Compare the new report to `protectai_deberta.json`. If Llama-Prompt-Guard-2
    wins on both the in-distribution test set and the DavidTKeane held-out,
    swap the spec in
    [`llm_firewall/classifiers/registry.py`](../../llm_firewall/classifiers/registry.py)

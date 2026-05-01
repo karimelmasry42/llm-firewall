@@ -41,19 +41,22 @@ of the build.
 Rather than train from scratch immediately, we benchmarked off-the-shelf
 prompt-injection classifiers against the SVM baseline. The current bake-off:
 
-| Model | in-dist F1 | DavidTKeane F1 |
-|---|---|---|
-| Old SVM (English) | 0.712 | 0.447 |
-| Old SVM (Spanish) | 0.495 | 0.169 |
-| `protectai/deberta-v3-base-prompt-injection-v2` (shipped) | **0.885** | **0.661** |
-| `meta-llama/Prompt-Guard-2-86M` | _pending HF auth_ | _pending HF auth_ |
+| Model | in-dist F1 | DavidTKeane F1 | in-dist ROC-AUC |
+|---|---|---|---|
+| Old SVM (English) | 0.712 | 0.447 | 0.758 |
+| Old SVM (Spanish) | 0.495 | 0.169 | 0.596 |
+| `protectai/deberta-v3-base-prompt-injection-v2` (shipped) | **0.885** | **0.661** | **0.944** |
+| `meta-llama/Llama-Prompt-Guard-2-86M` | 0.705 | 0.485 | 0.833 |
 
-The shipped model dramatically beats the SVM on every realistic source.
-`Prompt-Guard-2-86M` was the originally preferred multilingual choice but
-is a gated Meta model — it requires accepting Meta's license at the
-dataset card and authenticating via `huggingface-cli login`. Once auth is
-set up, swapping is a two-line change in
-[`registry.py`](../../llm_firewall/classifiers/registry.py).
+protectai/deberta wins at the default threshold (0.5) on every metric we
+gate on. Llama-Prompt-Guard-2-86M (Meta's multilingual classifier — gated;
+requires accepting the license at the model card and `huggingface-cli
+login`) scored *higher* held-out ROC-AUC and PR-AUC, meaning its score
+ranks prompts better — but its default threshold is conservative on our
+prompt mix, costing recall and dragging F1 down. Threshold-tuning it is a
+follow-up; if it then beats protectai, swapping is a two-line change in
+[`registry.py`](../../llm_firewall/classifiers/registry.py). See
+[`models.md`](models.md) for the full breakdown.
 
 ### 3. Training (skipped for v1)
 
@@ -85,7 +88,7 @@ behind the `huggingface_sequence` backend, served by `HFSequenceClassifier`
 in [`llm_firewall/classifiers/huggingface.py`](../../llm_firewall/classifiers/huggingface.py).
 The model file itself is never committed to the repo — `from_pretrained()`
 lazy-downloads it from HuggingFace and caches under `~/.cache/huggingface/`,
-which keeps the repo tiny and works the same way Prompt-Guard-2 will when
+which keeps the repo tiny and works the same way Llama-Prompt-Guard-2 will when
 its auth is set up.
 
 The language router still exists for output-side use, but for input
@@ -97,8 +100,8 @@ key.
 
 - ✅ Dataset pipeline + committed parquets + manifest
 - ✅ `HFSequenceClassifier` runtime (handles any `AutoModelForSequenceClassification` checkpoint)
-- ✅ Eval harness + committed reports for SVM (English + Spanish) and protectai/deberta
+- ✅ Eval harness + committed reports for SVM (English + Spanish), protectai/deberta, and Llama-Prompt-Guard-2-86M
 - ✅ `protectai/deberta-v3-base-prompt-injection-v2` shipped as v1 input classifier
-- ⏳ `meta-llama/Prompt-Guard-2-86M` evaluation pending HF authentication
+- 🔜 Threshold-tune Llama-Prompt-Guard-2-86M and re-bake-off (it has higher held-out AUC; threshold tuning may flip the choice)
 - 🔜 Native-language Spanish adversarial training data (separate task)
 - 🔜 Calibrated probability + per-deployment configurable threshold
