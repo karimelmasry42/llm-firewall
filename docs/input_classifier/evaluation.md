@@ -89,8 +89,10 @@ When comparing two classifiers (e.g. SVM baseline vs Prompt-Guard-2):
 
 ## Decision gate (for Phase 3)
 
-We promote `Prompt-Guard-2-86M` (or any other off-the-shelf candidate) over
-the SVM only if all of the following hold:
+We promote *any* off-the-shelf candidate (the bake-off considered
+`protectai/deberta-v3-base-prompt-injection-v2` and
+`meta-llama/Prompt-Guard-2-86M`) over the SVM only if all of the
+following hold:
 
 - **F1 ≥ 0.85** on `in_distribution_test`.
 - **No regression** vs the Spanish SVM on Spanish-tagged DavidTKeane rows
@@ -102,6 +104,11 @@ the SVM only if all of the following hold:
 
 If those don't hold, we move to Phase 4 (train a frozen-embedder + head).
 
+The shipped v1 winner is `protectai/deberta-v3-base-prompt-injection-v2`
+(it cleared all three criteria, see [`models.md`](models.md#decision-applied)).
+`meta-llama/Prompt-Guard-2-86M` is gated and remains a candidate for
+re-evaluation once HF authentication is set up.
+
 ## Reproducing the numbers
 
 The eval reports under `data/input_classifier/eval/` are committed. To
@@ -109,7 +116,9 @@ regenerate any of them:
 
 ```bash
 python scripts/input_classifier/evaluate.py --classifier svm_baseline
-python scripts/input_classifier/evaluate.py --classifier prompt_guard_2
+python scripts/input_classifier/evaluate.py --classifier svm_baseline_spanish
+python scripts/input_classifier/evaluate.py --classifier protectai_deberta
+python scripts/input_classifier/evaluate.py --classifier prompt_guard_2  # requires HF auth
 ```
 
 Each command writes `data/input_classifier/eval/<classifier>.json`

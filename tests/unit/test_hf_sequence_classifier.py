@@ -21,7 +21,7 @@ class _FakeTokenizer:
     """Mimics enough of an `AutoTokenizer` instance for the runtime."""
 
     @classmethod
-    def from_pretrained(cls, _model_id):
+    def from_pretrained(cls, _model_id, **_kwargs):
         return cls()
 
     def __call__(self, text, **_kwargs):
@@ -88,12 +88,12 @@ def patch_transformers(monkeypatch):
 
     class _AutoTokenizer:
         @staticmethod
-        def from_pretrained(model_id):
-            return _FakeTokenizer.from_pretrained(model_id)
+        def from_pretrained(model_id, **kwargs):
+            return _FakeTokenizer.from_pretrained(model_id, **kwargs)
 
     class _AutoModel:
         @staticmethod
-        def from_pretrained(_model_id):
+        def from_pretrained(_model_id, **_kwargs):
             return fake_model_holder["model"]
 
     monkeypatch.setattr(transformers, "AutoTokenizer", _AutoTokenizer)
@@ -193,3 +193,95 @@ def test_hf_sequence_classifier_rejects_unresolvable_label(patch_transformers):
     )
     with pytest.raises(ValueError, match="Cannot infer blocking-label index"):
         HFSequenceClassifier(spec)
+
+
+def test_hf_sequence_classifier_logs_warning_on_truncation(
+    patch_transformers, caplog
+):
+    """Long inputs should log a WARNING that they hit `max_length` (evasion)."""
+    import logging
+
+    from llm_firewall.classifiers.huggingface import HFSequenceClassifier
+
+    spec = ClassifierSpec(
+        name="test_hf_truncate",
+        backend="huggingface_sequence",
+        model_id="dummy",
+        preprocess=normalize_whitespace,
+        max_length=3,  # the fake tokenizer always returns 3 tokens
+        threshold=0.5,
+    )
+    clf = HFSequenceClassifier(spec)
+    with caplog.at_level(logging.WARNING, logger="llm_firewall.classifiers.huggingface"):
+        clf.evaluate("any text — fake tokenizer ignores content")
+    truncation_warnings = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING and "truncated" in r.message
+    ]
+    assert truncation_warnings, "expected a truncation warning to be logged"
+
+
+def test_hf_sequence_classifier_resolves_label_before_device_move(
+    patch_transformers, monkeypatch
+):
+    """A bad `injection_label_name` must error out BEFORE `model.to(device)`.
+
+    Regression: previously `from_pretrained → .to(device) → resolve_index`
+    would leave a 100s-of-MB checkpoint sitting in GPU memory when the spec
+    was misconfigured. This test asserts `.to()` is never called on the
+    fake model when label resolution raises.
+    """
+    fake_model = _FakeModel.make({0: "alpha", 1: "beta"})
+    moved_to: list = []
+    original_to = fake_model.to
+
+    def _tracking_to(device):
+        moved_to.append(device)
+        return original_to(device)
+
+    fake_model.to = _tracking_to  # type: ignore[method-assign]
+    patch_transformers["model"] = fake_model
+
+    from llm_firewall.classifiers.huggingface import HFSequenceClassifier
+
+    spec = ClassifierSpec(
+        name="test_hf_label_first",
+        backend="huggingface_sequence",
+        model_id="dummy",
+        injection_label_name="DOES_NOT_EXIST",
+        preprocess=normalize_whitespace,
+    )
+    with pytest.raises(ValueError, match="not found in model.config.id2label"):
+        HFSequenceClassifier(spec)
+    assert moved_to == [], (
+        "model.to(device) should not be called when label resolution fails"
+    )
+
+
+def test_hf_sequence_classifier_returns_p_injection_unconditionally(
+    patch_transformers,
+):
+    """`confidence` and the detail string both speak P(injection), not winning class."""
+    from llm_firewall.classifiers.huggingface import HFSequenceClassifier
+
+    # Block on idx 1 with high probability; passed result also has high
+    # P(idx=1) which is still the blocking score.
+    spec = ClassifierSpec(
+        name="test_hf_score_contract",
+        backend="huggingface_sequence",
+        model_id="dummy",
+        preprocess=normalize_whitespace,
+        threshold=0.5,
+    )
+    clf = HFSequenceClassifier(spec)
+    r = clf.evaluate("anything")
+    # The fake model ALWAYS produces softmax≈1 at index 1. So this should be
+    # blocked with confidence near 1, and the detail string speaks P(injection).
+    assert r.passed is False
+    assert r.confidence > 0.9
+    assert "P(injection)=" in r.detail
+    # The percentage in the detail string should match `confidence`, not its
+    # complement. Catch any accidental flip.
+    pct_str = r.detail.split("P(injection)=")[1].rstrip("]").strip()
+    pct = float(pct_str.rstrip("%")) / 100.0
+    assert abs(pct - r.confidence) < 0.01

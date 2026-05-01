@@ -41,7 +41,15 @@ class EnsembleValidationResult:
 
 
 class ClassifierEnsemble:
-    """Loads explicitly configured classifiers and evaluates them all."""
+    """Loads explicitly configured classifiers and evaluates them all.
+
+    The ensemble owns a `ThreadPoolExecutor` for `validate_async`. In a
+    long-running FastAPI process the executor is created once at app
+    startup and reused for the life of the process — Python's interpreter
+    shutdown reclaims it via the `_python_exit` atexit hook. For shorter
+    lifecycles (tests, scripts), call `close()` or use the ensemble as a
+    context manager to shut the executor down deterministically.
+    """
 
     def __init__(self, classifier_specs: Sequence[ClassifierSpec]):
         self._classifier_specs = list(classifier_specs)
@@ -51,6 +59,7 @@ class ClassifierEnsemble:
         self._executor = ThreadPoolExecutor(
             max_workers=max(1, len(self._classifiers))
         )
+        self._closed = False
 
     @property
     def model_names(self) -> list[str]:
@@ -79,6 +88,26 @@ class ClassifierEnsemble:
             passed=all(result.passed for result in results),
             results=results,
         )
+
+    def close(self) -> None:
+        """Shut down the worker pool. Safe to call multiple times."""
+        if self._closed:
+            return
+        self._executor.shutdown(wait=False)
+        self._closed = True
+
+    def __enter__(self) -> "ClassifierEnsemble":
+        return self
+
+    def __exit__(self, *_exc) -> None:
+        self.close()
+
+    def __del__(self) -> None:
+        # Best-effort cleanup if the caller forgot to close().
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 def _build_classifier(spec: ClassifierSpec):

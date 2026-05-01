@@ -313,12 +313,19 @@ class HFSequenceClassifier:
             ) from exc
 
         device = _select_torch_device()
-        tokenizer = AutoTokenizer.from_pretrained(self.model_id)
-        model = AutoModelForSequenceClassification.from_pretrained(self.model_id)
+        tokenizer = AutoTokenizer.from_pretrained(
+            self.model_id, trust_remote_code=False
+        )
+        model = AutoModelForSequenceClassification.from_pretrained(
+            self.model_id, trust_remote_code=False
+        )
+        # Resolve the blocking-label index BEFORE moving weights to the
+        # device, so a configuration error doesn't leave a 100s-of-MB model
+        # stranded in GPU memory until the next GC cycle.
+        block_idx = self._resolve_blocking_index(model)
         model = model.to(device)
         model.eval()
 
-        block_idx = self._resolve_blocking_index(model)
         logger.info(
             "loaded %s on %s (blocking label index=%d, label=%r)",
             self.model_id,
@@ -368,6 +375,18 @@ class HFSequenceClassifier:
             max_length=self._max_length,
             padding=True,
         ).to(self._device)
+        # Warn when truncation actually happened. A long benign-looking
+        # preamble could push an injection payload past `max_length` and the
+        # classifier would only see the safe prefix — useful evasion vector
+        # to surface in logs even if we still have to truncate.
+        input_len = int(inputs["input_ids"].shape[-1])
+        if input_len >= self._max_length:
+            logger.warning(
+                "%s: input truncated to max_length=%d tokens; the tail of the "
+                "prompt was not seen by the classifier (potential evasion vector)",
+                self.name,
+                self._max_length,
+            )
         if "token_type_ids" in inputs and not getattr(
             self._model.config, "type_vocab_size", 0
         ):
@@ -377,24 +396,19 @@ class HFSequenceClassifier:
             logits = self._model(**inputs).logits
 
         # Softmax across labels; take the configured blocking label's prob.
+        # `confidence` in the FilterResult is always P(injection) regardless
+        # of pass/fail so downstream metrics (ROC-AUC, PR-AUC) and the detail
+        # string both speak the same number.
         probs = self._torch.softmax(logits, dim=-1).squeeze(0).tolist()
         blocking_score = float(probs[self._block_idx])
         blocked = blocking_score > self._threshold
         latency_ms = round((perf_counter() - started_at) * 1000, 3)
 
-        if blocked:
-            return FilterResult(
-                passed=False,
-                filter_name=self.name,
-                confidence=blocking_score,
-                latency_ms=latency_ms,
-                detail=f"[BLOCKED] {self.name} | Confidence: {blocking_score:.1%}",
-            )
-
+        verdict = "BLOCKED" if blocked else "PASSED"
         return FilterResult(
-            passed=True,
+            passed=not blocked,
             filter_name=self.name,
             confidence=blocking_score,
             latency_ms=latency_ms,
-            detail=f"[PASSED] {self.name} | Confidence: {1 - blocking_score:.1%}",
+            detail=f"[{verdict}] {self.name} | P(injection)={blocking_score:.1%}",
         )
