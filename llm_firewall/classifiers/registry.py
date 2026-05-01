@@ -100,18 +100,28 @@ class ClassifierSpec:
 # specs (`linear_svm_input_classifier.pkl`, `linear_svm_spanish.pkl`) which
 # operated on regex tag-substituted text and had no semantic understanding.
 # See docs/input_classifier/ for the dataset/eval/model bake-off that
-# justified this choice. To swap models (e.g. once
-# meta-llama/Llama-Prompt-Guard-2-86M is approved + authenticated), replace the
-# spec below — the runtime is generic.
+# justified this choice.
+#
+# Threshold tuning: Meta's Llama-Prompt-Guard-2-86M is well-calibrated
+# but its score distribution is *peaky* — the bulk of injection
+# probability mass sits below 0.01 even for true positives. The default
+# 0.5 threshold yields recall=0.32 on the multilingual DavidTKeane held-out;
+# a sweep over val.parquet pushed the F1-optimal threshold down to ~0.001,
+# which lifts DavidTKeane F1 from 0.485 → 0.824 and JailbreakBench F1
+# from 0.448 → 0.723 (see docs/input_classifier/models.md). The runtime is
+# generic; swapping models is a model_id + injection_label_* change.
 INPUT_CLASSIFIER_SPECS = [
     ClassifierSpec(
-        name="protectai_deberta_v3_prompt_injection_v2",
-        display_name="protectai/deberta-v3-base-prompt-injection-v2",
+        name="llama_prompt_guard_2_86m",
+        display_name="Llama-Prompt-Guard-2-86M",
         backend="huggingface_sequence",
-        model_id="protectai/deberta-v3-base-prompt-injection-v2",
+        model_id="meta-llama/Llama-Prompt-Guard-2-86M",
         preprocess=normalize_whitespace,
-        injection_label_name="INJECTION",
-        threshold=0.5,
+        # Meta's id2label uses {0: "LABEL_0", 1: "LABEL_1"}; index 1 is
+        # "INJECTION" per the model card.
+        injection_label_id=1,
+        # Tuned on val.parquet — see docstring above.
+        threshold=0.001,
         max_length=512,
     ),
 ]

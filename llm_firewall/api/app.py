@@ -6,6 +6,8 @@ preloaded validators, decision log) and registers the route modules.
 """
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI
 
 from llm_firewall.api import dashboard as dashboard_routes
@@ -20,6 +22,26 @@ from llm_firewall.classifiers.registry import (
     get_output_classifier_specs,
 )
 from llm_firewall.core.config import Settings
+
+
+# Endpoints the dashboard hits often (or holds open). Keeping them out of
+# the access log makes the console useful again — actual chat-completion
+# requests still log normally.
+_QUIET_ACCESS_PATHS = ("/api/stream", "/api/logs", "/api/stats", "/api/config", "/health")
+
+
+class _QuietAccessLogFilter(logging.Filter):
+    """Drop uvicorn access-log records for noisy dashboard endpoints."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not any(path in msg for path in _QUIET_ACCESS_PATHS)
+
+
+# Install once at import time. uvicorn re-installs its access logger on
+# every run, so attaching the filter to the named logger is enough — both
+# `make run` (uvicorn entry-point) and `pytest` (TestClient) honor it.
+logging.getLogger("uvicorn.access").addFilter(_QuietAccessLogFilter())
 
 
 def create_app(

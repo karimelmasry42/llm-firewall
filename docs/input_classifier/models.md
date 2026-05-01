@@ -13,8 +13,8 @@ you exactly how the numbers moved.
 |---|---|---|---|---|
 | `svm_baseline` | Linear SVM (sklearn `SGDClassifier`) | English-only | `data/models/linear_svm_input_classifier.pkl` (existing) | Floor |
 | `svm_baseline_spanish` | Linear SVM | Spanish-only | `data/models/linear_svm_spanish.pkl` (existing) | Floor (multilingual fallback) |
-| `protectai_deberta` | DeBERTa-v3-base, fine-tuned for prompt injection | English (with some cross-lingual transfer from DeBERTa pretraining) | [protectai/deberta-v3-base-prompt-injection-v2](https://huggingface.co/protectai/deberta-v3-base-prompt-injection-v2) | **Shipped as v1** |
-| `prompt_guard_2` | Meta's Llama-Prompt-Guard-2 (DeBERTa-v3 family, multilingual) | Yes (8 languages explicitly trained) | [meta-llama/Llama-Prompt-Guard-2-86M](https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M) | Tested; runner-up at default threshold |
+| `protectai_deberta` | DeBERTa-v3-base, fine-tuned for prompt injection | English (with some cross-lingual transfer from DeBERTa pretraining) | [protectai/deberta-v3-base-prompt-injection-v2](https://huggingface.co/protectai/deberta-v3-base-prompt-injection-v2) | Strong English baseline; runner-up |
+| `prompt_guard_2` | Meta's Llama-Prompt-Guard-2 (DeBERTa-v3 family, multilingual) | Yes (8 languages explicitly trained) | [meta-llama/Llama-Prompt-Guard-2-86M](https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M) | **Shipped as v1** (with tuned threshold=0.001) |
 
 `meta-llama/Llama-Prompt-Guard-2-86M` is gated. Accept Meta's license at
 the model card URL and run `huggingface-cli login` before evaluating it.
@@ -25,8 +25,9 @@ the model card URL and run `huggingface-cli login` before evaluating it.
 |---|---|---|---|---|---|
 | `svm_baseline` | 0.712 | 0.447 | 0.489 | 0.758 | 4.5 / 10.2 ms |
 | `svm_baseline_spanish` | 0.495 | 0.169 | 0.140 | 0.596 | 4.4 / 9.2 ms |
-| `protectai_deberta` | **0.885** | **0.661** | 0.000¹ | **0.944** | 83 / 199 ms (MPS, M1) |
-| `prompt_guard_2` (Llama-Prompt-Guard-2-86M) | 0.705 | 0.485 | 0.448 | 0.833 | 69 / 166 ms (MPS, M1) |
+| `protectai_deberta` (thr=0.5) | **0.885** | 0.661 | 0.000¹ | **0.944** | 83 / 199 ms (MPS, M1) |
+| `prompt_guard_2` @ default thr=0.5 | 0.705 | 0.485 | 0.448 | 0.833 | 69 / 166 ms (MPS, M1) |
+| **`prompt_guard_2` @ tuned thr=0.001 (shipped)** | 0.839 | **0.824** | **0.723** | 0.833 | 72 / 169 ms (MPS, M1) |
 
 ¹ **JailbreakBench is a category mismatch for an input-injection
 classifier.** The `Goal` column contains natural-language descriptions of
@@ -36,42 +37,79 @@ trained narrowly on prompt-injection patterns and correctly flags none of
 those rows; Llama-Prompt-Guard-2 has broader training and surfaces some.
 Neither result is a regression in the input-injection sense.
 
-### Why Llama-Prompt-Guard-2 lost on F1 but won on AUC
+### Why Llama-Prompt-Guard-2 needed threshold tuning
 
-Llama-Prompt-Guard-2 is a more conservative scorer at the default
-threshold (0.5):
-
-- **Higher precision, lower recall**: in-dist precision 0.843, recall
-  0.606 — vs protectai 0.943 / 0.833. Same calibration trend on the
-  held-outs.
+At the default threshold (0.5) Llama-Prompt-Guard-2 scored:
+- **Higher precision, lower recall**: in-dist 0.843 / 0.606 vs protectai
+  0.943 / 0.833. Same trend on the held-outs (DavidTKeane recall 0.320).
 - **Higher held-out ROC-AUC and PR-AUC**: DavidTKeane ROC-AUC 0.923 vs
   protectai 0.795; PR-AUC 0.965 vs 0.916. JailbreakBench ROC-AUC 0.754
   vs 0.600.
 
-The combination — better separation in the score distribution but lower
-recall at the published threshold — is exactly what you'd expect from a
-model whose default threshold is mis-calibrated for our prompt mix. A
-threshold sweep would likely move it ahead of protectai on F1 too. That's
-deferred to a follow-up; for v1 we ship the model that wins at the
-default threshold.
+That combination — better score-rank but lower recall at the published
+threshold — is the signature of a *peaky* score distribution: the model
+puts most injection probability mass below 0.01 even for true positives,
+so the default 0.5 cutoff misses them.
+
+A sweep over `val.parquet` (n=1456) confirmed this:
+
+| threshold | val P | val R | val F1 |
+|---|---|---|---|
+| 0.0001 | 0.600 | 1.000 | 0.750 |
+| **0.0010** | **0.763** | **0.908** | **0.829** |
+| 0.0050 | 0.788 | 0.772 | 0.780 |
+| 0.0100 | 0.797 | 0.742 | 0.769 |
+| 0.0500 | 0.815 | 0.669 | 0.735 |
+| 0.5000 (default) | 0.836 | 0.574 | 0.681 |
+
+`thr=0.001` was the F1-optimal point on val. Applied to the held-out
+test sets it lifts every metric — see the bold row in the headline table
+above. We ship this configuration.
+
+### Decision: ship Llama-Prompt-Guard-2 with threshold=0.001
+
+The trade-off vs protectai/deberta:
+
+|  | protectai @ 0.5 | Llama-PG2 @ 0.001 | Δ |
+|---|---|---|---|
+| in-dist F1 | 0.885 | 0.839 | **−4.6** |
+| DavidTKeane F1 | 0.661 | 0.824 | **+16.3** |
+| JailbreakBench F1 | 0.000 | 0.723 | **+72.3** |
+
+The 4.6-point in-distribution loss is mostly on English data (where
+protectai is at its strongest); the 16-point DavidTKeane gain is on the
+multilingual stress test, and the 72-point JailbreakBench gain captures
+broader adversarial patterns protectai's narrow training missed entirely.
+For a firewall the held-out generalization matters more than the
+in-distribution maximum, so we ship Llama-Prompt-Guard-2.
+
+protectai/deberta-v3 remains in the eval harness as a strong English
+baseline for future bake-offs.
 
 ## Per-source breakdown (in-distribution test set)
 
-| Source | n | SVM F1 | protectai F1 | Llama-PG2 F1 |
+Per-source F1 at the threshold each model uses (protectai @ 0.5,
+Llama-PG2 @ 0.001):
+
+| Source | n | SVM F1 | protectai F1 (0.5) | Llama-PG2 F1 (0.001, shipped) |
 |---|---|---|---|---|
-| `neuralchemy_prompt_injection` | 413 | 0.459 | **0.921** | 0.686 |
-| `walledai_jailbreakhub` | 342 | 0.571 | **0.775** | 0.658 |
-| `xtram1_safe_guard_prompt_injection` | 379 | **0.973** | 0.898 | 0.640 |
-| `lakera_gandalf_ignore_instructions` | 100 | 0.936 | **1.000** | 0.995 |
-| `deepset_prompt_injections` | 33 | 0.667 | **0.650** | 0.471 |
+| `neuralchemy_prompt_injection` | 413 | 0.459 | 0.921 | **0.909** |
+| `walledai_jailbreakhub` | 342 | 0.571 | 0.775 | 0.541 (recall=1.000, precision=0.371) |
+| `xtram1_safe_guard_prompt_injection` | 379 | 0.973 | 0.898 | **0.960** |
+| `lakera_gandalf_ignore_instructions` | 100 | 0.936 | 1.000 | **1.000** |
+| `deepset_prompt_injections` | 33 | 0.667 | 0.650 | **0.844** |
 | `jackhhao_jailbreak_classification` | 11 | 0.000 | 0.000 | 0.000 |
 | `rubend18_chatgpt_jailbreak_prompts` | 2 | 1.000 | 1.000 | 1.000 |
 | `openassistant_oasst1_benign` | 175 | — (all benign) | — (all benign) | — (all benign) |
 
-protectai/deberta wins or ties on every source except xTRam1 (synthetic),
-where the SVM happens to be best because it was likely trained on similar
-data. Llama-Prompt-Guard-2 trails on every source at the default threshold,
-consistent with its under-calibrated recall.
+The shipped Llama-PG2 wins or ties on 5 of 7 injection sources. The one
+real regression is JailbreakHub — the threshold is so low (0.001) that
+the model fires on a lot of borderline benign prompts in that source
+(precision drops to 0.371 even though recall is perfect). That's the
+price we pay for catching long-tail injections in the multilingual
+held-out set. If JailbreakHub precision becomes the binding constraint a
+slightly higher threshold (e.g. 0.005, F1=0.78 on val) is the obvious
+safety valve.
 
 ## DavidTKeane multilingual stress test
 
