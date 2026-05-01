@@ -51,6 +51,25 @@ class ClassifierLike(Protocol):
 # --------------------------------------------------------------------------- #
 # Adapters that wrap firewall internals as ClassifierLike implementations.
 # --------------------------------------------------------------------------- #
+def _wrap_filter_result_classifier(inner) -> "ClassifierLike":
+    """Wrap any firewall classifier (FilterResult-returning) as ClassifierLike.
+
+    `FilterResult.confidence` from both `PickleClassifier` (when the underlying
+    model exposes `predict_proba`) and `HFSequenceClassifier` is the blocking-
+    label probability — i.e. P(injection) — regardless of whether the result
+    passed or blocked. We pass it through unchanged. Inverting it for passed
+    rows would corrupt ROC-AUC / PR-AUC because score then means P(injection)
+    for positives and P(benign) for negatives.
+    """
+    class _Adapter:
+        def predict(self, text: str) -> tuple[int, float]:
+            r = inner.evaluate(text)
+            label = 0 if r.passed else 1
+            return label, float(r.confidence)
+
+    return _Adapter()
+
+
 def _build_svm_baseline() -> ClassifierLike:
     """Adapter for the legacy English Linear-SVM input classifier.
 
@@ -71,19 +90,7 @@ def _build_svm_baseline() -> ClassifierLike:
         path=MODELS_DIR / "linear_svm_input_classifier.pkl",
         preprocess=preprocess_injection_text,
     )
-    inner = PickleClassifier(spec)
-
-    class _Adapter:
-        def predict(self, text: str) -> tuple[int, float]:
-            r = inner.evaluate(text)
-            label = 0 if r.passed else 1
-            # The pickle classifier reports `confidence` as the winning-class
-            # probability. Re-derive a "blocking score" so it always means
-            # P(injection): equal to confidence when blocked, otherwise 1-confidence.
-            score = r.confidence if label == 1 else 1.0 - r.confidence
-            return label, score
-
-    return _Adapter()
+    return _wrap_filter_result_classifier(PickleClassifier(spec))
 
 
 def _build_svm_baseline_spanish() -> ClassifierLike:
@@ -100,16 +107,7 @@ def _build_svm_baseline_spanish() -> ClassifierLike:
         path=MODELS_DIR / "linear_svm_spanish.pkl",
         preprocess=normalize_whitespace,
     )
-    inner = PickleClassifier(spec)
-
-    class _Adapter:
-        def predict(self, text: str) -> tuple[int, float]:
-            r = inner.evaluate(text)
-            label = 0 if r.passed else 1
-            score = r.confidence if label == 1 else 1.0 - r.confidence
-            return label, score
-
-    return _Adapter()
+    return _wrap_filter_result_classifier(PickleClassifier(spec))
 
 
 def _build_prompt_guard_2() -> ClassifierLike:
@@ -131,15 +129,7 @@ def _build_prompt_guard_2() -> ClassifierLike:
         threshold=0.5,
         max_length=512,
     )
-    inner = HFSequenceClassifier(spec)
-
-    class _Adapter:
-        def predict(self, text: str) -> tuple[int, float]:
-            r = inner.evaluate(text)
-            label = 0 if r.passed else 1
-            return label, r.confidence if label == 1 else 1.0 - r.confidence
-
-    return _Adapter()
+    return _wrap_filter_result_classifier(HFSequenceClassifier(spec))
 
 
 def _build_protectai_deberta() -> ClassifierLike:
@@ -161,15 +151,7 @@ def _build_protectai_deberta() -> ClassifierLike:
         threshold=0.5,
         max_length=512,
     )
-    inner = HFSequenceClassifier(spec)
-
-    class _Adapter:
-        def predict(self, text: str) -> tuple[int, float]:
-            r = inner.evaluate(text)
-            label = 0 if r.passed else 1
-            return label, r.confidence if label == 1 else 1.0 - r.confidence
-
-    return _Adapter()
+    return _wrap_filter_result_classifier(HFSequenceClassifier(spec))
 
 
 CLASSIFIER_BUILDERS: dict[str, Callable[[], ClassifierLike]] = {

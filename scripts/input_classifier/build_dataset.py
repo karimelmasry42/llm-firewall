@@ -77,6 +77,39 @@ def _git_dirty() -> bool:
         return False
 
 
+def _resolve_hf_revision(repo_id: str, revision: str) -> str | None:
+    """Resolve a branch/tag (e.g. 'main') to its underlying commit SHA on HF.
+
+    Recorded in manifest.json so reviewers can verify they got byte-identical
+    upstream data, even if the branch advances later. Returns None on failure
+    rather than blocking the build — the parquet content is what matters; the
+    SHA is metadata.
+    """
+    try:
+        from huggingface_hub import HfApi  # type: ignore
+
+        info = HfApi().dataset_info(repo_id, revision=revision)
+        return getattr(info, "sha", None)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("could not resolve revision for %s@%s: %s", repo_id, revision, exc)
+        return None
+
+
+def _ratio_argtype(value: str) -> float:
+    """argparse type for --target-ratio: must lie strictly in (0, 1)."""
+    try:
+        v = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            f"--target-ratio must be a float, got {value!r}"
+        ) from exc
+    if not (0.0 < v < 1.0):
+        raise argparse.ArgumentTypeError(
+            f"--target-ratio must be strictly between 0 and 1 (exclusive); got {v}"
+        )
+    return v
+
+
 def _load_hf(spec: dict[str, Any]):
     """Load a HuggingFace dataset with the given spec; concatenate splits if needed."""
     from datasets import concatenate_datasets, load_dataset
@@ -178,6 +211,8 @@ def _detect_lang(row: dict[str, Any], spec: dict[str, Any]) -> str:
 def _load_source(spec: dict[str, Any], max_text_chars: int) -> tuple[list[Row], dict[str, Any]]:
     """Load and normalize one source. Returns rows + per-source stats."""
     logger.info("loading %s (%s)", spec["name"], spec["hf_id"])
+    requested_revision = spec.get("revision") or "main"
+    resolved_sha = _resolve_hf_revision(spec["hf_id"], requested_revision)
     ds = _load_hf(spec)
     ds = _apply_filter(ds, spec)
 
@@ -212,6 +247,9 @@ def _load_source(spec: dict[str, Any], max_text_chars: int) -> tuple[list[Row], 
         "kept_rows": len(rows),
         "skipped_rows": skipped,
         "label_counts": {str(k): v for k, v in label_counts.items()},
+        "hf_id": spec["hf_id"],
+        "requested_revision": requested_revision,
+        "resolved_revision": resolved_sha,
     }
     logger.info(
         "  %s: %d rows kept (skipped %d). labels=%s",
@@ -372,8 +410,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sources", type=Path, default=DEFAULT_SOURCES)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
-    parser.add_argument("--target-ratio", type=float, default=0.6,
-                        help="target fraction of label==1 rows (default 0.6)")
+    parser.add_argument("--target-ratio", type=_ratio_argtype, default=0.6,
+                        help="target fraction of label==1 rows; must be in (0, 1) (default 0.6)")
     parser.add_argument("--max-text-chars", type=int, default=10000)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--log-level", default="INFO")

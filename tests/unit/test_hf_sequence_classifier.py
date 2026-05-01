@@ -43,16 +43,21 @@ class _FakeModelOutput:
 
 
 class _FakeModel:
-    """Returns deterministic logits so we can assert on outputs."""
+    """Returns deterministic logits so we can assert on outputs.
 
-    def __init__(self, id2label, blocking_idx, blocking_score):
+    Always emits a logit vector with a single dominant value at
+    `blocking_idx` (so softmax probability there is ~1.0). That's enough to
+    exercise the runtime's index-resolution + threshold logic without
+    needing real probability calibration in the fake.
+    """
+
+    def __init__(self, id2label, blocking_idx):
         self.config = _FakeModelConfig(id2label)
         self._blocking_idx = blocking_idx
-        self._blocking_score = blocking_score
 
     @classmethod
-    def make(cls, id2label, blocking_idx=1, blocking_score=0.9):
-        return cls(id2label, blocking_idx, blocking_score)
+    def make(cls, id2label, blocking_idx=1):
+        return cls(id2label, blocking_idx)
 
     @classmethod
     def from_pretrained(cls, _model_id):
@@ -69,10 +74,8 @@ class _FakeModel:
 
         n_labels = len(self.config.id2label)
         logits = torch.full((1, n_labels), -10.0)
-        # A large logit on the blocking index gives ~self._blocking_score after softmax.
-        # We back-solve for a logit that yields the desired blocking probability.
-        # softmax([-10, x]) = [tiny, ~1] when x >> -10. Approximation is fine.
-        logits[0, self._blocking_idx] = 5.0  # ~softmax probability ≈ 1.0
+        # Dominant logit at blocking_idx → softmax probability ≈ 1.0 there.
+        logits[0, self._blocking_idx] = 5.0
         return _FakeModelOutput(logits=logits)
 
 
@@ -150,7 +153,7 @@ def test_hf_sequence_classifier_resolves_label_by_name(patch_transformers, monke
 def test_hf_sequence_classifier_uses_explicit_id(patch_transformers):
     """`injection_label_id` short-circuits id2label lookup entirely."""
     patch_transformers["model"] = _FakeModel.make(
-        {0: "label_a", 1: "label_b"}, blocking_idx=0, blocking_score=0.9
+        {0: "label_a", 1: "label_b"}, blocking_idx=0
     )
 
     from llm_firewall.classifiers.huggingface import HFSequenceClassifier
@@ -175,7 +178,7 @@ def test_hf_sequence_classifier_rejects_missing_model_id():
 
 
 def test_hf_sequence_classifier_rejects_unresolvable_label(patch_transformers):
-    """No id_id, no name, >2 labels, no blocking-keyword match → error."""
+    """No injection_label_id, no name, >2 labels, no keyword match → error."""
     patch_transformers["model"] = _FakeModel.make(
         {0: "alpha", 1: "beta", 2: "gamma"}, blocking_idx=0
     )

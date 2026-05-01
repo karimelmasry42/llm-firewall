@@ -1,5 +1,5 @@
 {
-  "_comment": "Pinned source datasets for the input classifier. The build script (scripts/input_classifier/build_dataset.py) reads this file and records the resolved commit SHA in manifest.json after each run. Pin `revision` to that SHA after the first successful build for stronger reproducibility.",
+  "_comment": "Pinned source datasets for the input classifier. The build script (scripts/input_classifier/build_dataset.py) reads this file, resolves each `revision` (branch/tag) to its underlying HuggingFace commit SHA, downloads the data via `datasets.load_dataset(...)`, and records the resolved SHA in manifest.json (under training_pool.per_source.<name>.resolved_revision and held_out.<name>.resolved_revision). After the first successful build you can replace any `revision: \"main\"` here with the resolved SHA the manifest reports for stronger reproducibility — the script will then load that exact commit even if main advances upstream.",
   "training_pool": [
     {
       "name": "neuralchemy_prompt_injection",

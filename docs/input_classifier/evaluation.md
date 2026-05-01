@@ -31,10 +31,12 @@ For each table the harness reports:
   useful for ranking models in the bake-off.
 - **Accuracy** = (TP + TN) / total. Easy to report, but misleading on
   imbalanced data; prefer F1.
-- **ROC-AUC**: area under the precision-recall ROC curve. Threshold-free
-  measure of how well the score separates the two classes.
-- **PR-AUC** (`average_precision_score`): area under precision-recall curve.
-  More informative than ROC-AUC when the positive class is rare.
+- **ROC-AUC**: area under the receiver operating characteristic curve
+  (true-positive rate vs false-positive rate, swept across thresholds).
+  Threshold-free measure of how well the score separates the two classes.
+- **PR-AUC** (`average_precision_score`): area under the precision-recall
+  curve. More informative than ROC-AUC when the positive class is rare or
+  when false positives matter much more than false negatives.
 - **Latency**:
   - **`mean_latency_ms`**: average wall-clock time per `predict()` call.
   - **`p95_latency_ms`**: 95th percentile. Sort all measured latencies
