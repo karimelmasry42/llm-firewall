@@ -75,25 +75,41 @@ class ClassifierSpec:
     model_id: str | None = None
     threshold: float = 0.5
     max_length: int = 128
+    # Used by `HFSequenceClassifier` to locate the "blocking" label in
+    # `model.config.id2label`. Set at most one. If both are None we fall back
+    # to index 1 for binary models, or the first label whose name contains a
+    # known blocking keyword (`injection`, `jailbreak`, etc.).
+    injection_label_id: int | None = None
+    injection_label_name: str | None = None
 
 
+# v1 semantic input classifier. Replaces the old per-language Linear SVM
+# specs (`linear_svm_input_classifier.pkl`, `linear_svm_spanish.pkl`) which
+# operated on regex tag-substituted text and had no semantic understanding.
+# See docs/input_classifier/ for the dataset/eval/model bake-off that
+# justified this choice. To swap models (e.g. once
+# meta-llama/Prompt-Guard-2-86M is approved + authenticated), replace the
+# spec below — the runtime is generic.
 INPUT_CLASSIFIER_SPECS = [
     ClassifierSpec(
-        name="linear_svm_input_classifier",
-        path=MODELS_DIR / "linear_svm_input_classifier.pkl",
-        preprocess=preprocess_injection_text,
-    ),
-    ClassifierSpec(
-        name="linear_svm_spanish",
-        path=MODELS_DIR / "linear_svm_spanish.pkl",
+        name="protectai_deberta_v3_prompt_injection_v2",
+        display_name="protectai/deberta-v3-base-prompt-injection-v2",
+        backend="huggingface_sequence",
+        model_id="protectai/deberta-v3-base-prompt-injection-v2",
         preprocess=normalize_whitespace,
+        injection_label_name="INJECTION",
+        threshold=0.5,
+        max_length=512,
     ),
 ]
 
 
+# A single multilingual classifier handles every language. The router can
+# still send `language` for logging/output-side use, but every key returns
+# the same spec list here.
 INPUT_CLASSIFIER_SPECS_BY_LANGUAGE = {
-    "en": [INPUT_CLASSIFIER_SPECS[0]],
-    "es": [INPUT_CLASSIFIER_SPECS[1]],
+    "en": list(INPUT_CLASSIFIER_SPECS),
+    "es": list(INPUT_CLASSIFIER_SPECS),
 }
 
 

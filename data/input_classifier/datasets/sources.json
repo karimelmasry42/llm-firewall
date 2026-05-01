@@ -1,0 +1,141 @@
+{
+  "_comment": "Pinned source datasets for the input classifier. The build script (scripts/input_classifier/build_dataset.py) reads this file and records the resolved commit SHA in manifest.json after each run. Pin `revision` to that SHA after the first successful build for stronger reproducibility.",
+  "training_pool": [
+    {
+      "name": "neuralchemy_prompt_injection",
+      "hf_id": "neuralchemy/Prompt-injection-dataset",
+      "config": "core",
+      "revision": "main",
+      "split": "all",
+      "text_field": "text",
+      "label_field": "label",
+      "license": "permissive",
+      "language": "en",
+      "role": "training"
+    },
+    {
+      "name": "walledai_jailbreakhub",
+      "hf_id": "walledai/JailbreakHub",
+      "config": null,
+      "revision": "main",
+      "split": "train",
+      "text_field": "prompt",
+      "label_field": "jailbreak",
+      "license": "MIT",
+      "language": "en",
+      "role": "training"
+    },
+    {
+      "name": "xtram1_safe_guard_prompt_injection",
+      "hf_id": "xTRam1/safe-guard-prompt-injection",
+      "config": null,
+      "revision": "main",
+      "split": "all",
+      "text_field": "text",
+      "label_field": "label",
+      "license": "unspecified",
+      "language": "en",
+      "role": "training",
+      "license_warning": "Dataset card does not specify a license; verify before commercial deployment."
+    },
+    {
+      "name": "jackhhao_jailbreak_classification",
+      "hf_id": "jackhhao/jailbreak-classification",
+      "config": null,
+      "revision": "main",
+      "split": "all",
+      "text_field": "prompt",
+      "label_field": "type",
+      "license": "Apache-2.0",
+      "language": "en",
+      "role": "training",
+      "label_map": {"jailbreak": 1, "benign": 0}
+    },
+    {
+      "name": "lakera_gandalf_ignore_instructions",
+      "hf_id": "Lakera/gandalf_ignore_instructions",
+      "config": null,
+      "revision": "main",
+      "split": "all",
+      "text_field": "text",
+      "label_field": null,
+      "fixed_label": 1,
+      "license": "MIT",
+      "language": "en",
+      "role": "training"
+    },
+    {
+      "name": "deepset_prompt_injections",
+      "hf_id": "deepset/prompt-injections",
+      "config": null,
+      "revision": "main",
+      "split": "all",
+      "text_field": "text",
+      "label_field": "label",
+      "license": "Apache-2.0",
+      "language": "mixed",
+      "role": "training"
+    },
+    {
+      "name": "rubend18_chatgpt_jailbreak_prompts",
+      "hf_id": "rubend18/ChatGPT-Jailbreak-Prompts",
+      "config": null,
+      "revision": "main",
+      "split": "train",
+      "text_field": "Prompt",
+      "label_field": null,
+      "fixed_label": 1,
+      "license": "permissive",
+      "language": "en",
+      "role": "training"
+    },
+    {
+      "name": "openassistant_oasst1_benign",
+      "hf_id": "OpenAssistant/oasst1",
+      "config": null,
+      "revision": "main",
+      "split": "train",
+      "text_field": "text",
+      "label_field": null,
+      "fixed_label": 0,
+      "filter": {"role": "prompter", "parent_id_is_null": true},
+      "license": "Apache-2.0",
+      "language": "multi",
+      "role": "training"
+    }
+  ],
+  "held_out_evaluation": [
+    {
+      "name": "davidtkeane_prompt_injection",
+      "hf_id": "DavidTKeane/ai-prompt-ai-injection-dataset",
+      "config": null,
+      "revision": "main",
+      "split": "all",
+      "text_field": "prompt",
+      "label_field": "expected",
+      "label_map": {"BLOCKED": 1, "PASS": 0},
+      "drop_label_values": ["VARIES"],
+      "language_field": "language",
+      "license": "curated",
+      "role": "eval"
+    },
+    {
+      "name": "jailbreakbench_behaviors",
+      "hf_id": "JailbreakBench/JBB-Behaviors",
+      "config": "behaviors",
+      "revision": "main",
+      "split_per_label": {"harmful": 1, "benign": 0},
+      "text_field": "Goal",
+      "license": "MIT",
+      "language": "en",
+      "role": "eval"
+    }
+  ],
+  "excluded": [
+    {
+      "name": "qualifire_prompt_injection_benchmark",
+      "hf_id": "qualifire/Qualifire-prompt-injection-benchmark",
+      "reason": "CC-BY-NC-4.0 (non-commercial). Cannot use for training a deployed classifier."
+    }
+  ]
+}

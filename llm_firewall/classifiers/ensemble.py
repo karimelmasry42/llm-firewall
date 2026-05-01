@@ -8,7 +8,10 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
-from llm_firewall.classifiers.huggingface import TinyToxicDetectorClassifier
+from llm_firewall.classifiers.huggingface import (
+    HFSequenceClassifier,
+    TinyToxicDetectorClassifier,
+)
 from llm_firewall.classifiers.pickle_classifier import PickleClassifier
 from llm_firewall.classifiers.registry import ClassifierSpec
 from llm_firewall.filters import FilterResult
@@ -85,5 +88,8 @@ def _build_classifier(spec: ClassifierSpec):
 
     if spec.backend == "huggingface_tiny_toxic_detector":
         return TinyToxicDetectorClassifier(spec)
+
+    if spec.backend == "huggingface_sequence":
+        return HFSequenceClassifier(spec)
 
     raise ValueError(f"Unsupported classifier backend '{spec.backend}' for {spec.name}")

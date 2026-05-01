@@ -27,12 +27,13 @@ The firewall is fail-closed: only fully-approved requests and responses pass thr
 
 | Stage | Label (in logs/dashboard) | Source |
 |---|---|---|
-| Input — English | `linear_svm_input_classifier` | `data/models/linear_svm_input_classifier.pkl` |
-| Input — Spanish | `linear_svm_spanish` | `data/models/linear_svm_spanish.pkl` |
+| Input (all languages) | `protectai/deberta-v3-base-prompt-injection-v2` | Hugging Face `protectai/deberta-v3-base-prompt-injection-v2` |
 | Response masking | regex PII masker (always on) | [llm_firewall/filters/pii.py](llm_firewall/filters/pii.py) |
 | Output | `Tiny-Toxic-Detector` | Hugging Face `AssistantsLab/Tiny-Toxic-Detector` |
 
 To add, swap, or remove classifiers, edit [llm_firewall/classifiers/registry.py](llm_firewall/classifiers/registry.py). Each spec defines the dashboard label, a pickle path or Hugging Face id, and the preprocessing function applied before prediction.
+
+For the full story of how the input classifier was built and chosen — datasets, evaluation harness, model bake-off, and reproduction commands — see [docs/input_classifier/](docs/input_classifier/README.md).
 
 ## Quickstart
 

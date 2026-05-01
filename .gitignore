@@ -15,4 +15,6 @@ env/
 htmlcov/
 data/*
 !data/models/
+!data/input_classifier/
+data/input_classifier/embeddings/
 .claude
