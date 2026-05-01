@@ -21,6 +21,7 @@ from llm_firewall.classifiers.registry import ClassifierSpec
 from llm_firewall.core.config import Settings
 from llm_firewall.core.proxy import forward_to_llm
 from llm_firewall.filters.pii import mask
+from llm_firewall.api import conversations as conv_state
 from llm_firewall.validators.input import InputValidator
 from llm_firewall.validators.output import OutputValidator
 
@@ -140,6 +141,33 @@ def _elapsed_ms(started_at: float) -> float:
     return round((time.perf_counter() - started_at) * 1000, 3)
 
 
+def _primary_input_score(input_result) -> float:
+    """Pick the per-prompt P(injection) score we feed into the conversation gate.
+
+    The input ensemble may run multiple classifiers; we take the maximum of
+    their `confidence` values (each is P(injection) per the contract in
+    HFSequenceClassifier and PickleClassifier). The language router doesn't
+    contribute — it isn't a security signal.
+    """
+    if not input_result.results:
+        return 0.0
+    return max(float(r.confidence) for r in input_result.results)
+
+
+def _attach_conversation(payload: dict, conversation) -> None:
+    """Inject conversation_id + a small summary into a chat-completion payload.
+
+    OpenAI clients tolerate unknown top-level fields, so this is the
+    cheapest way to give back the running conversation state without
+    forcing callers onto a custom envelope. The dashboard reads these
+    fields directly.
+    """
+    if not isinstance(payload, dict):
+        return
+    payload["conversation_id"] = conversation.id
+    payload["conversation"] = conversation.to_summary()
+
+
 def _build_model_error_response(
     prompt: str,
     stage: str,
@@ -235,6 +263,48 @@ async def process_chat_completion(
     settings = app.state.settings
     request_started_at = time.perf_counter()
     prompt = _extract_prompt(body.get("messages", []))
+    conversation = conv_state.get_or_create(
+        app, conv_state.extract_conversation_id(body)
+    )
+
+    # If this conversation already tripped the cumulative gate, refuse
+    # immediately — no need to score the new prompt or hit the upstream.
+    if conv_state.is_blocked_by_cumulative(conversation):
+        refusal_response = build_openai_response(settings.refusal_message)
+        refusal_response["conversation_id"] = conversation.id
+        refusal_response["conversation"] = conversation.to_summary()
+        detail = (
+            f"Conversation {conversation.id} previously blocked: "
+            f"{conversation.blocked_reason}"
+        )
+        log_decision(
+            app,
+            {
+                "type": "CONVERSATION_BLOCKED",
+                "prompt": prompt,
+                "response": settings.refusal_message,
+                "decision": "BLOCKED",
+                "scores": {},
+                "latencies_ms": {},
+                "total_latency_ms": _elapsed_ms(request_started_at),
+                "detail": detail,
+                "conversation_id": conversation.id,
+                "cumulative_score": conversation.cumulative_score,
+            },
+        )
+        return {
+            "status_code": 200,
+            "payload": refusal_response,
+            "prompt": prompt,
+            "decision": "BLOCKED",
+            "content": settings.refusal_message,
+            "scores": {},
+            "latencies_ms": {},
+            "total_latency_ms": _elapsed_ms(request_started_at),
+            "detail": detail,
+            "failed_filters": ["conversation_cumulative"],
+            "conversation_id": conversation.id,
+        }
 
     if not prompt:
         return {
@@ -318,6 +388,11 @@ async def process_chat_completion(
     input_scores["input:Language Router"] = route_decision.confidence
     input_latencies["input:Language Router"] = route_decision.latency_ms
 
+    # Primary per-prompt score: max P(injection) across the input classifiers
+    # (excluding the language router which isn't a security signal). This
+    # is what feeds the conversation-level cumulative gate.
+    primary_score = _primary_input_score(input_result)
+
     if not input_result.passed:
         blocked_by = [result.filter_name for result in input_result.failed_filters]
         logger.warning(
@@ -328,6 +403,10 @@ async def process_chat_completion(
         )
         refusal_response = build_openai_response(settings.refusal_message)
         total_latency_ms = _elapsed_ms(request_started_at)
+        conv_state.record_turn(
+            app, conversation, prompt=prompt, score=primary_score, decision="BLOCKED"
+        )
+        _attach_conversation(refusal_response, conversation)
         log_decision(
             app,
             {
@@ -340,6 +419,8 @@ async def process_chat_completion(
                 "total_latency_ms": total_latency_ms,
                 "detail": detail,
                 "failed_filters": blocked_by,
+                "conversation_id": conversation.id,
+                "cumulative_score": conversation.cumulative_score,
             },
         )
         return {
@@ -353,6 +434,56 @@ async def process_chat_completion(
             "total_latency_ms": total_latency_ms,
             "detail": detail,
             "failed_filters": blocked_by,
+            "conversation_id": conversation.id,
+        }
+
+    # The per-prompt classifier passed, but adding this prompt's score might
+    # tip the conversation's running total over the cumulative threshold.
+    # Probe by tentatively adding the score and checking, without mutating
+    # state until we know the final decision.
+    cum_threshold = float(settings.conversation_cumulative_threshold)
+    if (conversation.cumulative_score + primary_score) >= cum_threshold:
+        detail = (
+            f"Blocked by conversation cumulative score "
+            f"({conversation.cumulative_score + primary_score:.4f} ≥ "
+            f"{cum_threshold:.4f}) after {len(conversation.turns) + 1} turn(s) | "
+            f"{route_detail}"
+        )
+        logger.warning("Blocked prompt by conversation gate: %s", detail)
+        refusal_response = build_openai_response(settings.refusal_message)
+        total_latency_ms = _elapsed_ms(request_started_at)
+        conv_state.record_turn(
+            app, conversation, prompt=prompt, score=primary_score, decision="BLOCKED"
+        )
+        _attach_conversation(refusal_response, conversation)
+        log_decision(
+            app,
+            {
+                "type": "CONVERSATION_BLOCKED",
+                "prompt": prompt,
+                "response": settings.refusal_message,
+                "decision": "BLOCKED",
+                "scores": input_scores,
+                "latencies_ms": input_latencies,
+                "total_latency_ms": total_latency_ms,
+                "detail": detail,
+                "failed_filters": ["conversation_cumulative"],
+                "conversation_id": conversation.id,
+                "cumulative_score": conversation.cumulative_score,
+            },
+        )
+        return {
+            "status_code": 200,
+            "payload": refusal_response,
+            "prompt": prompt,
+            "decision": "BLOCKED",
+            "content": settings.refusal_message,
+            "scores": input_scores,
+            "latencies_ms": input_latencies,
+            "total_latency_ms": total_latency_ms,
+            "detail": detail,
+            "failed_filters": ["conversation_cumulative"],
+            "conversation_id": conversation.id,
         }
 
     scores = dict(input_scores)
@@ -368,6 +499,11 @@ async def process_chat_completion(
         logger.error("Upstream LLM error: %s", exc)
         detail = f"Upstream error: {exc} | {route_detail}"
         total_latency_ms = _elapsed_ms(request_started_at)
+        # Don't penalize the conversation for an upstream failure — record the
+        # turn with score=0 so cumulative isn't poisoned by infrastructure noise.
+        conv_state.record_turn(
+            app, conversation, prompt=prompt, score=0.0, decision="ERROR"
+        )
         log_decision(
             app,
             {
@@ -379,6 +515,8 @@ async def process_chat_completion(
                 "latencies_ms": latencies_ms,
                 "total_latency_ms": total_latency_ms,
                 "detail": detail,
+                "conversation_id": conversation.id,
+                "cumulative_score": conversation.cumulative_score,
             },
         )
         return {
@@ -392,6 +530,7 @@ async def process_chat_completion(
             "total_latency_ms": total_latency_ms,
             "detail": detail,
             "failed_filters": [],
+            "conversation_id": conversation.id,
         }
 
     assistant_content = _extract_assistant_content(upstream_response)
@@ -423,6 +562,13 @@ async def process_chat_completion(
                 detail = f"{detail} | {pii_detail}"
             refusal_response = build_openai_response(settings.refusal_message)
             total_latency_ms = _elapsed_ms(request_started_at)
+            # Output was blocked, but the input passed cleanly. Record the
+            # turn against the input score (which the user actually sent),
+            # not against the model's response.
+            conv_state.record_turn(
+                app, conversation, prompt=prompt, score=primary_score, decision="DROPPED"
+            )
+            _attach_conversation(refusal_response, conversation)
             log_decision(
                 app,
                 {
@@ -435,6 +581,8 @@ async def process_chat_completion(
                     "total_latency_ms": total_latency_ms,
                     "detail": detail,
                     "failed_filters": blocked_by,
+                    "conversation_id": conversation.id,
+                    "cumulative_score": conversation.cumulative_score,
                 },
             )
             return {
@@ -448,6 +596,7 @@ async def process_chat_completion(
                 "total_latency_ms": total_latency_ms,
                 "detail": detail,
                 "failed_filters": blocked_by,
+                "conversation_id": conversation.id,
             }
 
     detail = (
@@ -459,6 +608,10 @@ async def process_chat_completion(
     if pii_detail:
         detail = f"{detail} | {pii_detail}"
     total_latency_ms = _elapsed_ms(request_started_at)
+    conv_state.record_turn(
+        app, conversation, prompt=prompt, score=primary_score, decision="ALLOWED"
+    )
+    _attach_conversation(upstream_response, conversation)
     log_decision(
         app,
         {
@@ -470,6 +623,8 @@ async def process_chat_completion(
             "latencies_ms": latencies_ms,
             "total_latency_ms": total_latency_ms,
             "detail": detail,
+            "conversation_id": conversation.id,
+            "cumulative_score": conversation.cumulative_score,
         },
     )
     return {
@@ -483,4 +638,5 @@ async def process_chat_completion(
         "total_latency_ms": total_latency_ms,
         "detail": detail,
         "failed_filters": [],
+        "conversation_id": conversation.id,
     }

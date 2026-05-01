@@ -26,9 +26,44 @@ def _iter_total_latency_values(log: list[dict]) -> list[float]:
     ]
 
 
+def _classifier_latency_ms(entry: dict) -> float | None:
+    """Sum latencies of every classifier (input + output) for one log entry.
+
+    The decision log stores per-classifier timings under `latencies_ms` with
+    keys like `input:<name>` and `output:<name>`. Summing those gives the
+    cost the firewall *itself* added to a request, exclusive of the
+    upstream LLM call (which dominates `total_latency_ms` and isn't a
+    fair representation of how fast our screening is).
+    """
+    latencies = entry.get("latencies_ms")
+    if not isinstance(latencies, dict):
+        return None
+    total = 0.0
+    counted = False
+    for value in latencies.values():
+        if isinstance(value, (int, float)):
+            total += float(value)
+            counted = True
+    return total if counted else None
+
+
 def _compute_average_total_latency_ms(log: list[dict]) -> float:
-    """Compute the mean end-to-end latency across the current in-memory log."""
+    """Mean end-to-end latency across the current log (kept for compatibility)."""
     latencies = _iter_total_latency_values(log)
+    if not latencies:
+        return 0.0
+    return round(sum(latencies) / len(latencies), 3)
+
+
+def _compute_average_classifier_latency_ms(log: list[dict]) -> float:
+    """Mean of (sum of input+output classifier latencies) across the log.
+
+    This is what the dashboard displays as "average latency" — it answers
+    "how fast does the firewall make decisions?" rather than "how fast is
+    the upstream LLM?"
+    """
+    latencies = [v for v in (_classifier_latency_ms(entry) for entry in log)
+                 if v is not None]
     if not latencies:
         return 0.0
     return round(sum(latencies) / len(latencies), 3)
@@ -55,6 +90,11 @@ async def get_stats(request: Request):
         "dropped": sum(1 for entry in log if entry["decision"] == "DROPPED"),
         "allowed": sum(1 for entry in log if entry["decision"] == "ALLOWED"),
         "errors": sum(1 for entry in log if entry["decision"] == "ERROR"),
+        # Classifier-only mean (input + output classifiers summed). This is
+        # what the dashboard surfaces as "average latency".
+        "average_classifier_latency_ms": _compute_average_classifier_latency_ms(log),
+        # End-to-end including the upstream LLM call. Kept for API compatibility
+        # and for anyone who actually wants the round-trip number.
         "average_total_latency_ms": _compute_average_total_latency_ms(log),
     }
 
@@ -70,6 +110,8 @@ async def get_config(request: Request):
         "output_models": list_classifier_names(state.output_classifier_specs),
         "enable_output_classifiers": state.settings.enable_output_classifiers,
         "refusal_message": state.settings.refusal_message,
+        "conversation_cumulative_threshold": state.settings.conversation_cumulative_threshold,
+        "conversation_max_tracked": state.settings.conversation_max_tracked,
     }
 
 
