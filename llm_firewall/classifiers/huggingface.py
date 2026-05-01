@@ -1,14 +1,55 @@
 """
-Hugging Face-backed toxicity classifier for firewall output checks.
+Hugging Face-backed classifiers used by the firewall.
+
+Two runtimes live here:
+
+* `TinyToxicDetectorClassifier` — bespoke loader for AssistantsLab's
+  `Tiny-Toxic-Detector`, an output-side toxicity filter built on a custom
+  `TinyTransformer` architecture.
+* `HFSequenceClassifier` — generic wrapper around any
+  `AutoModelForSequenceClassification` checkpoint on the Hub. Intended for
+  off-the-shelf prompt-injection classifiers (e.g.
+  `meta-llama/Llama-Prompt-Guard-2-86M`).
+
+Both implement the same firewall-internal contract: take a `ClassifierSpec`,
+expose `evaluate(text) -> FilterResult`, and let `ClassifierEnsemble`
+dispatch to them via the `spec.backend` field.
 """
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, replace
 from time import perf_counter
 
 from llm_firewall.classifiers.registry import ClassifierSpec
 from llm_firewall.filters import FilterResult
+
+logger = logging.getLogger(__name__)
+
+
+def _select_torch_device():
+    """Pick the best available torch device: mps -> cuda -> cpu.
+
+    Centralized here so both runtimes can opt in. The existing
+    `TinyToxicDetectorClassifier` historically pinned to CPU; new code paths
+    use this helper. Honor `LLM_FIREWALL_FORCE_CPU=1` for tests / debugging.
+    """
+    import os
+
+    import torch
+
+    if os.environ.get("LLM_FIREWALL_FORCE_CPU") == "1":
+        return torch.device("cpu")
+
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None and getattr(mps, "is_available", lambda: False)():
+        return torch.device("mps")
+
+    if torch.cuda.is_available():
+        return torch.device("cuda")
+
+    return torch.device("cpu")
 
 
 @dataclass(frozen=True)
@@ -208,4 +249,166 @@ class TinyToxicDetectorClassifier:
             confidence=blocking_score,
             latency_ms=latency_ms,
             detail=f"[PASSED] {self.name} | Confidence: {1 - blocking_score:.1%}",
+        )
+
+
+class HFSequenceClassifier:
+    """Generic `AutoModelForSequenceClassification` runtime.
+
+    Loads any HuggingFace sequence-classification checkpoint and exposes the
+    same `evaluate(text) -> FilterResult` contract every other firewall
+    classifier uses, so it slots into `ClassifierEnsemble` unchanged. The
+    role (input vs output classifier) is decided at registry level by where
+    the spec lives, not by this class.
+
+    The spec controls which label is treated as "blocking":
+
+    * `injection_label_id`: integer index into `model.config.id2label`. Use
+      this when you know the exact index (e.g., 1 for typical binary
+      checkpoints).
+    * `injection_label_name`: case-insensitive label string. Looked up in
+      `id2label`. Useful for multi-label models like Llama-Prompt-Guard-2 where
+      one of several labels means "block."
+
+    If neither is set we fall back to: index 1 for 2-class models, otherwise
+    the first label whose lowercased name matches a known blocking keyword
+    (`injection`, `jailbreak`, `unsafe`, `harmful`, `malicious`).
+    """
+
+    _BLOCKING_KEYWORDS = {
+        "injection",
+        "jailbreak",
+        "unsafe",
+        "harmful",
+        "malicious",
+        "adversarial",
+        "attack",
+        "block",
+        "blocked",
+    }
+
+    def __init__(self, spec: ClassifierSpec):
+        if not spec.model_id:
+            raise ValueError("HFSequenceClassifier requires a model_id")
+
+        self.name = spec.display_name or spec.name
+        self.model_id = spec.model_id
+        self._preprocess = spec.preprocess
+        self._threshold = spec.threshold
+        self._max_length = spec.max_length
+        self._injection_label_id = getattr(spec, "injection_label_id", None)
+        self._injection_label_name = getattr(spec, "injection_label_name", None)
+        self._torch, self._device, self._tokenizer, self._model, self._block_idx = (
+            self._load_runtime()
+        )
+
+    def _load_runtime(self):
+        try:
+            import torch
+            from transformers import AutoModelForSequenceClassification, AutoTokenizer
+        except ImportError as exc:
+            raise ValueError(
+                "HFSequenceClassifier requires 'torch' and 'transformers'. "
+                "Install them before enabling HuggingFace input classifiers."
+            ) from exc
+
+        device = _select_torch_device()
+        tokenizer = AutoTokenizer.from_pretrained(
+            self.model_id, trust_remote_code=False
+        )
+        model = AutoModelForSequenceClassification.from_pretrained(
+            self.model_id, trust_remote_code=False
+        )
+        # Resolve the blocking-label index BEFORE moving weights to the
+        # device, so a configuration error doesn't leave a 100s-of-MB model
+        # stranded in GPU memory until the next GC cycle.
+        block_idx = self._resolve_blocking_index(model)
+        model = model.to(device)
+        model.eval()
+
+        logger.info(
+            "loaded %s on %s (blocking label index=%d, label=%r)",
+            self.model_id,
+            device,
+            block_idx,
+            getattr(model.config, "id2label", {}).get(block_idx),
+        )
+        return torch, device, tokenizer, model, block_idx
+
+    def _resolve_blocking_index(self, model) -> int:
+        if self._injection_label_id is not None:
+            return int(self._injection_label_id)
+
+        id2label: dict[int, str] = getattr(model.config, "id2label", {}) or {}
+
+        if self._injection_label_name is not None:
+            target = str(self._injection_label_name).lower()
+            for idx, name in id2label.items():
+                if str(name).lower() == target:
+                    return int(idx)
+            raise ValueError(
+                f"injection_label_name={self._injection_label_name!r} not found in "
+                f"model.config.id2label={id2label!r}"
+            )
+
+        if len(id2label) == 2:
+            return 1
+
+        for idx, name in id2label.items():
+            lname = str(name).lower()
+            if any(kw in lname for kw in self._BLOCKING_KEYWORDS):
+                return int(idx)
+
+        raise ValueError(
+            f"Cannot infer blocking-label index for {self.model_id}. "
+            f"Set injection_label_id or injection_label_name. "
+            f"id2label={id2label!r}"
+        )
+
+    def evaluate(self, text: str) -> FilterResult:
+        started_at = perf_counter()
+        normalized_text = self._preprocess(text)
+        inputs = self._tokenizer(
+            normalized_text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=self._max_length,
+            padding=True,
+        ).to(self._device)
+        # Warn when truncation actually happened. A long benign-looking
+        # preamble could push an injection payload past `max_length` and the
+        # classifier would only see the safe prefix — useful evasion vector
+        # to surface in logs even if we still have to truncate.
+        input_len = int(inputs["input_ids"].shape[-1])
+        if input_len >= self._max_length:
+            logger.warning(
+                "%s: input truncated to max_length=%d tokens; the tail of the "
+                "prompt was not seen by the classifier (potential evasion vector)",
+                self.name,
+                self._max_length,
+            )
+        if "token_type_ids" in inputs and not getattr(
+            self._model.config, "type_vocab_size", 0
+        ):
+            del inputs["token_type_ids"]
+
+        with self._torch.no_grad():
+            logits = self._model(**inputs).logits
+
+        # Softmax across labels; take the configured blocking label's prob.
+        # `confidence` in the FilterResult is always P(injection) regardless
+        # of pass/fail so downstream metrics (ROC-AUC, PR-AUC) and the detail
+        # string both speak the same number.
+        probs = self._torch.softmax(logits, dim=-1).squeeze(0).tolist()
+        blocking_score = float(probs[self._block_idx])
+        blocked = blocking_score > self._threshold
+        latency_ms = round((perf_counter() - started_at) * 1000, 3)
+
+        verdict = "BLOCKED" if blocked else "PASSED"
+        return FilterResult(
+            passed=not blocked,
+            filter_name=self.name,
+            confidence=blocking_score,
+            latency_ms=latency_ms,
+            detail=f"[{verdict}] {self.name} | P(injection)={blocking_score:.1%}",
         )

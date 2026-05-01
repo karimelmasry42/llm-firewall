@@ -48,6 +48,10 @@ dev = [
     "pytest>=8.1.0",
     "pytest-asyncio>=0.23.0",
     "respx>=0.21.0",
+    # Offline tooling for the input-classifier dataset and eval pipeline.
+    # Required only by scripts/input_classifier/*; not used at runtime.
+    "datasets>=2.18.0",
+    "pyarrow>=15.0.0",
 ]
 
 [project.scripts]

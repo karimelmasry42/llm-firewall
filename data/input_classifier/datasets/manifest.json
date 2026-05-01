@@ -1,0 +1,251 @@
+{
+  "built_at": "2026-05-01T17:34:02.611771+00:00",
+  "git_dirty": false,
+  "git_sha": "a62cbacf37735ce149acb9c44803304f75d65e17",
+  "held_out": {
+    "davidtkeane_prompt_injection": {
+      "hf_id": "DavidTKeane/ai-prompt-ai-injection-dataset",
+      "kept_rows": 112,
+      "label_counts": {
+        "0": 37,
+        "1": 75
+      },
+      "raw_rows_after_filter": 112,
+      "requested_revision": "main",
+      "resolved_revision": "73dd3b0063f31de70fd48b9c75f1712995a27644",
+      "skipped_rows": 0
+    },
+    "jailbreakbench_behaviors": {
+      "hf_id": "JailbreakBench/JBB-Behaviors",
+      "kept_rows": 200,
+      "label_counts": {
+        "0": 100,
+        "1": 100
+      },
+      "raw_rows_after_filter": 200,
+      "requested_revision": "main",
+      "resolved_revision": "886acc352a31533ffbcf4ef22c744658688086fc",
+      "skipped_rows": 0
+    }
+  },
+  "max_text_chars": 10000,
+  "seed": 7,
+  "target_ratio": 0.6,
+  "training_pool": {
+    "balance": {
+      "ben_strata": 28,
+      "desired_ben": 5823,
+      "kept_ben": 5823,
+      "kept_inj": 8734,
+      "subsampled": true
+    },
+    "dedup": {
+      "exact_collisions": 1848,
+      "near_dup_collisions": 1739
+    },
+    "per_source": {
+      "deepset_prompt_injections": {
+        "hf_id": "deepset/prompt-injections",
+        "kept_rows": 662,
+        "label_counts": {
+          "0": 399,
+          "1": 263
+        },
+        "raw_rows_after_filter": 662,
+        "requested_revision": "main",
+        "resolved_revision": "4f61ecb038e9c3fb77e21034b22511b523772cdd",
+        "skipped_rows": 0
+      },
+      "jackhhao_jailbreak_classification": {
+        "hf_id": "jackhhao/jailbreak-classification",
+        "kept_rows": 1306,
+        "label_counts": {
+          "0": 640,
+          "1": 666
+        },
+        "raw_rows_after_filter": 1306,
+        "requested_revision": "main",
+        "resolved_revision": "2f2ceeb39658696fd3f462403562b6eea5306287",
+        "skipped_rows": 0
+      },
+      "lakera_gandalf_ignore_instructions": {
+        "hf_id": "Lakera/gandalf_ignore_instructions",
+        "kept_rows": 1000,
+        "label_counts": {
+          "1": 1000
+        },
+        "raw_rows_after_filter": 1000,
+        "requested_revision": "main",
+        "resolved_revision": "04737b65e90a6794ec227012e4a255a7def6344b",
+        "skipped_rows": 0
+      },
+      "neuralchemy_prompt_injection": {
+        "hf_id": "neuralchemy/Prompt-injection-dataset",
+        "kept_rows": 6274,
+        "label_counts": {
+          "0": 2538,
+          "1": 3736
+        },
+        "raw_rows_after_filter": 6274,
+        "requested_revision": "main",
+        "resolved_revision": "7d70432dfcf47a821612cbf9d34e9d9e3ad20e75",
+        "skipped_rows": 0
+      },
+      "openassistant_oasst1_benign": {
+        "hf_id": "OpenAssistant/oasst1",
+        "kept_rows": 9846,
+        "label_counts": {
+          "0": 9846
+        },
+        "raw_rows_after_filter": 9846,
+        "requested_revision": "main",
+        "resolved_revision": "fdf72ae0827c1cda404aff25b6603abec9e3399b",
+        "skipped_rows": 0
+      },
+      "rubend18_chatgpt_jailbreak_prompts": {
+        "hf_id": "rubend18/ChatGPT-Jailbreak-Prompts",
+        "kept_rows": 79,
+        "label_counts": {
+          "1": 79
+        },
+        "raw_rows_after_filter": 79,
+        "requested_revision": "main",
+        "resolved_revision": "b93e4982f8f8ad2d82c6d35e3c00d161844ad70a",
+        "skipped_rows": 0
+      },
+      "walledai_jailbreakhub": {
+        "hf_id": "walledai/JailbreakHub",
+        "kept_rows": 15140,
+        "label_counts": {
+          "0": 13735,
+          "1": 1405
+        },
+        "raw_rows_after_filter": 15140,
+        "requested_revision": "main",
+        "resolved_revision": "1a33b351b53167e37a64bd9bf7e286e435ba4a31",
+        "skipped_rows": 0
+      },
+      "xtram1_safe_guard_prompt_injection": {
+        "hf_id": "xTRam1/safe-guard-prompt-injection",
+        "kept_rows": 10296,
+        "label_counts": {
+          "0": 7150,
+          "1": 3146
+        },
+        "raw_rows_after_filter": 10296,
+        "requested_revision": "main",
+        "resolved_revision": "a3a877d608f37b7d20d9945671902df895ecdb46",
+        "skipped_rows": 0
+      }
+    },
+    "post_dedup_total": 41016,
+    "pre_dedup_total": 44603,
+    "splits": {
+      "test": {
+        "by_label": {
+          "0": 581,
+          "1": 874
+        },
+        "by_lang": {
+          "ca": 6,
+          "de": 4,
+          "en": 1346,
+          "es": 62,
+          "eu": 2,
+          "fr": 4,
+          "id": 1,
+          "ja": 2,
+          "pt-BR": 2,
+          "ru": 18,
+          "th": 4,
+          "zh": 4
+        },
+        "by_source": {
+          "deepset_prompt_injections": 33,
+          "jackhhao_jailbreak_classification": 11,
+          "lakera_gandalf_ignore_instructions": 100,
+          "neuralchemy_prompt_injection": 413,
+          "openassistant_oasst1_benign": 175,
+          "rubend18_chatgpt_jailbreak_prompts": 2,
+          "walledai_jailbreakhub": 342,
+          "xtram1_safe_guard_prompt_injection": 379
+        },
+        "total": 1455
+      },
+      "train": {
+        "by_label": {
+          "0": 4659,
+          "1": 6987
+        },
+        "by_lang": {
+          "ar": 3,
+          "ca": 32,
+          "cs": 1,
+          "da": 2,
+          "de": 50,
+          "en": 10735,
+          "es": 540,
+          "eu": 8,
+          "fr": 34,
+          "hu": 2,
+          "it": 19,
+          "ja": 6,
+          "ko": 1,
+          "pl": 7,
+          "pt-BR": 21,
+          "ru": 93,
+          "th": 24,
+          "tr": 2,
+          "uk-UA": 11,
+          "vi": 5,
+          "zh": 50
+        },
+        "by_source": {
+          "deepset_prompt_injections": 261,
+          "jackhhao_jailbreak_classification": 97,
+          "lakera_gandalf_ignore_instructions": 799,
+          "neuralchemy_prompt_injection": 3308,
+          "openassistant_oasst1_benign": 1394,
+          "rubend18_chatgpt_jailbreak_prompts": 11,
+          "walledai_jailbreakhub": 2746,
+          "xtram1_safe_guard_prompt_injection": 3030
+        },
+        "total": 11646
+      },
+      "val": {
+        "by_label": {
+          "0": 583,
+          "1": 873
+        },
+        "by_lang": {
+          "ca": 4,
+          "de": 5,
+          "en": 1336,
+          "es": 65,
+          "eu": 1,
+          "fi": 1,
+          "fr": 6,
+          "hu": 1,
+          "it": 1,
+          "pl": 1,
+          "pt-BR": 5,
+          "ru": 19,
+          "uk-UA": 1,
+          "vi": 1,
+          "zh": 9
+        },
+        "by_source": {
+          "deepset_prompt_injections": 32,
+          "jackhhao_jailbreak_classification": 13,
+          "lakera_gandalf_ignore_instructions": 100,
+          "neuralchemy_prompt_injection": 414,
+          "openassistant_oasst1_benign": 174,
+          "rubend18_chatgpt_jailbreak_prompts": 1,
+          "walledai_jailbreakhub": 344,
+          "xtram1_safe_guard_prompt_injection": 378
+        },
+        "total": 1456
+      }
+    }
+  }
+}

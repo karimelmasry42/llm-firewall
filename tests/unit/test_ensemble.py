@@ -2,7 +2,9 @@
 import pickle
 
 import joblib
+import pytest
 
+from llm_firewall.classifiers.ensemble import ClassifierEnsemble
 from llm_firewall.classifiers.huggingface import (
     TinyToxicDetectorClassifier,
     TinyTransformerConfig,
@@ -127,6 +129,58 @@ def test_tiny_toxic_detector_classifier_blocks_toxic_text(monkeypatch):
     assert result.passed is False
     assert result.filter_name == "Tiny-Toxic-Detector"
     assert result.confidence == 0.91
+
+
+@pytest.mark.asyncio
+async def test_classifier_ensemble_validate_async_runs_pickle_backend(tmp_path):
+    """Smoke test the async path against the pickle backend.
+
+    Covers the parallel-execution branch (`run_in_executor`) that's not
+    exercised by the synchronous path. We use a pickle classifier rather
+    than the HF runtime to avoid network/torch overhead in the unit test —
+    the executor doesn't care which classifier is on the other side.
+    """
+    model_path = tmp_path / "async_guard.pkl"
+    with model_path.open("wb") as handle:
+        pickle.dump({"pipeline": KeywordPipeline(["block me"])}, handle)
+
+    spec = ClassifierSpec(name="async_guard", path=model_path)
+    ensemble = ClassifierEnsemble([spec])
+    try:
+        passed = await ensemble.validate_async("hello world")
+        blocked = await ensemble.validate_async("please block me now")
+    finally:
+        ensemble.close()
+
+    assert passed.passed is True
+    assert blocked.passed is False
+    assert [r.filter_name for r in blocked.results] == ["async_guard"]
+
+
+def test_classifier_ensemble_close_is_idempotent(tmp_path):
+    """`close()` may be called multiple times; second call is a no-op."""
+    model_path = tmp_path / "close_idempotent.pkl"
+    with model_path.open("wb") as handle:
+        pickle.dump({"pipeline": KeywordPipeline(["x"])}, handle)
+    ensemble = ClassifierEnsemble([ClassifierSpec(name="x", path=model_path)])
+    ensemble.close()
+    ensemble.close()  # must not raise
+
+
+def test_classifier_ensemble_works_as_context_manager(tmp_path):
+    """`with ClassifierEnsemble(...)` shuts down the executor on exit."""
+    model_path = tmp_path / "ctx_guard.pkl"
+    with model_path.open("wb") as handle:
+        pickle.dump({"pipeline": KeywordPipeline(["block me"])}, handle)
+    spec = ClassifierSpec(name="ctx_guard", path=model_path)
+
+    with ClassifierEnsemble([spec]) as ensemble:
+        result = ensemble.validate("benign text")
+        assert result.passed is True
+    # After the with block the executor is closed; the bool is private but
+    # we surface enough through the context manager that future regressions
+    # become obvious.
+    assert ensemble._closed is True
 
 
 def test_tiny_toxic_detector_uses_checkpoint_position_shape():

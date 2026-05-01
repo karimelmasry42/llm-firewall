@@ -1,0 +1,597 @@
+{
+  "classifier": "svm_baseline_spanish",
+  "evaluated_at": "2026-05-01T17:34:29.486746+00:00",
+  "limit": null,
+  "tables": {
+    "held_out_davidtkeane": {
+      "accuracy": 0.3839,
+      "by_lang": {
+        "Chinese (Mandarin)": {
+          "accuracy": 0.0,
+          "confusion": {
+            "fn": 1,
+            "fp": 0,
+            "tn": 0,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "mean_latency_ms": 3.114,
+          "n": 1,
+          "p95_latency_ms": 3.114,
+          "pr_auc": null,
+          "precision": 0.0,
+          "recall": 0.0,
+          "roc_auc": null
+        },
+        "English": {
+          "accuracy": 0.42,
+          "confusion": {
+            "fn": 57,
+            "fp": 1,
+            "tn": 36,
+            "tp": 6
+          },
+          "f1": 0.1714,
+          "mean_latency_ms": 3.171,
+          "n": 100,
+          "p95_latency_ms": 3.517,
+          "pr_auc": 0.8233,
+          "precision": 0.8571,
+          "recall": 0.0952,
+          "roc_auc": 0.7224
+        },
+        "English (translation vector)": {
+          "accuracy": 0.0,
+          "confusion": {
+            "fn": 1,
+            "fp": 0,
+            "tn": 0,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "mean_latency_ms": 3.234,
+          "n": 1,
+          "p95_latency_ms": 3.234,
+          "pr_auc": null,
+          "precision": 0.0,
+          "recall": 0.0,
+          "roc_auc": null
+        },
+        "French": {
+          "accuracy": 0.0,
+          "confusion": {
+            "fn": 5,
+            "fp": 0,
+            "tn": 0,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "mean_latency_ms": 3.268,
+          "n": 5,
+          "p95_latency_ms": 3.401,
+          "pr_auc": null,
+          "precision": 0.0,
+          "recall": 0.0,
+          "roc_auc": null
+        },
+        "French (embedded in English)": {
+          "accuracy": 0.0,
+          "confusion": {
+            "fn": 1,
+            "fp": 0,
+            "tn": 0,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "mean_latency_ms": 3.145,
+          "n": 1,
+          "p95_latency_ms": 3.145,
+          "pr_auc": null,
+          "precision": 0.0,
+          "recall": 0.0,
+          "roc_auc": null
+        },
+        "German": {
+          "accuracy": 0.0,
+          "confusion": {
+            "fn": 2,
+            "fp": 0,
+            "tn": 0,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "mean_latency_ms": 3.098,
+          "n": 2,
+          "p95_latency_ms": 3.135,
+          "pr_auc": null,
+          "precision": 0.0,
+          "recall": 0.0,
+          "roc_auc": null
+        },
+        "Japanese": {
+          "accuracy": 0.0,
+          "confusion": {
+            "fn": 1,
+            "fp": 0,
+            "tn": 0,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "mean_latency_ms": 3.148,
+          "n": 1,
+          "p95_latency_ms": 3.148,
+          "pr_auc": null,
+          "precision": 0.0,
+          "recall": 0.0,
+          "roc_auc": null
+        },
+        "Spanish": {
+          "accuracy": 1.0,
+          "confusion": {
+            "fn": 0,
+            "fp": 0,
+            "tn": 0,
+            "tp": 1
+          },
+          "f1": 1.0,
+          "mean_latency_ms": 3.149,
+          "n": 1,
+          "p95_latency_ms": 3.149,
+          "pr_auc": null,
+          "precision": 1.0,
+          "recall": 1.0,
+          "roc_auc": null
+        }
+      },
+      "by_source": {
+        "davidtkeane_prompt_injection": {
+          "accuracy": 0.3839,
+          "confusion": {
+            "fn": 68,
+            "fp": 1,
+            "tn": 36,
+            "tp": 7
+          },
+          "f1": 0.1687,
+          "mean_latency_ms": 3.173,
+          "n": 112,
+          "p95_latency_ms": 3.501,
+          "pr_auc": 0.8442,
+          "precision": 0.875,
+          "recall": 0.0933,
+          "roc_auc": 0.7135
+        }
+      },
+      "confusion": {
+        "fn": 68,
+        "fp": 1,
+        "tn": 36,
+        "tp": 7
+      },
+      "f1": 0.1687,
+      "mean_latency_ms": 3.173,
+      "n": 112,
+      "p95_latency_ms": 3.501,
+      "pr_auc": 0.8442,
+      "precision": 0.875,
+      "recall": 0.0933,
+      "roc_auc": 0.7135
+    },
+    "held_out_jailbreakbench": {
+      "accuracy": 0.51,
+      "by_lang": {
+        "en": {
+          "accuracy": 0.51,
+          "confusion": {
+            "fn": 92,
+            "fp": 6,
+            "tn": 94,
+            "tp": 8
+          },
+          "f1": 0.1404,
+          "mean_latency_ms": 3.128,
+          "n": 200,
+          "p95_latency_ms": 3.348,
+          "pr_auc": 0.6222,
+          "precision": 0.5714,
+          "recall": 0.08,
+          "roc_auc": 0.6419
+        }
+      },
+      "by_source": {
+        "jailbreakbench_behaviors": {
+          "accuracy": 0.51,
+          "confusion": {
+            "fn": 92,
+            "fp": 6,
+            "tn": 94,
+            "tp": 8
+          },
+          "f1": 0.1404,
+          "mean_latency_ms": 3.128,
+          "n": 200,
+          "p95_latency_ms": 3.348,
+          "pr_auc": 0.6222,
+          "precision": 0.5714,
+          "recall": 0.08,
+          "roc_auc": 0.6419
+        }
+      },
+      "confusion": {
+        "fn": 92,
+        "fp": 6,
+        "tn": 94,
+        "tp": 8
+      },
+      "f1": 0.1404,
+      "mean_latency_ms": 3.128,
+      "n": 200,
+      "p95_latency_ms": 3.348,
+      "pr_auc": 0.6222,
+      "precision": 0.5714,
+      "recall": 0.08,
+      "roc_auc": 0.6419
+    },
+    "in_distribution_test": {
+      "accuracy": 0.5333,
+      "by_lang": {
+        "ca": {
+          "accuracy": 1.0,
+          "confusion": {
+            "fn": 0,
+            "fp": 0,
+            "tn": 6,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "mean_latency_ms": 3.378,
+          "n": 6,
+          "p95_latency_ms": 3.67,
+          "pr_auc": null,
+          "precision": 0.0,
+          "recall": 0.0,
+          "roc_auc": null
+        },
+        "de": {
+          "accuracy": 1.0,
+          "confusion": {
+            "fn": 0,
+            "fp": 0,
+            "tn": 4,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "mean_latency_ms": 3.265,
+          "n": 4,
+          "p95_latency_ms": 3.362,
+          "pr_auc": null,
+          "precision": 0.0,
+          "recall": 0.0,
+          "roc_auc": null
+        },
+        "en": {
+          "accuracy": 0.4963,
+          "confusion": {
+            "fn": 541,
+            "fp": 137,
+            "tn": 335,
+            "tp": 333
+          },
+          "f1": 0.4955,
+          "mean_latency_ms": 4.162,
+          "n": 1346,
+          "p95_latency_ms": 9.028,
+          "pr_auc": 0.7007,
+          "precision": 0.7085,
+          "recall": 0.381,
+          "roc_auc": 0.5484
+        },
+        "es": {
+          "accuracy": 1.0,
+          "confusion": {
+            "fn": 0,
+            "fp": 0,
+            "tn": 62,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "mean_latency_ms": 3.413,
+          "n": 62,
+          "p95_latency_ms": 3.766,
+          "pr_auc": null,
+          "precision": 0.0,
+          "recall": 0.0,
+          "roc_auc": null
+        },
+        "eu": {
+          "accuracy": 1.0,
+          "confusion": {
+            "fn": 0,
+            "fp": 0,
+            "tn": 2,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "mean_latency_ms": 3.106,
+          "n": 2,
+          "p95_latency_ms": 3.19,
+          "pr_auc": null,
+          "precision": 0.0,
+          "recall": 0.0,
+          "roc_auc": null
+        },
+        "fr": {
+          "accuracy": 1.0,
+          "confusion": {
+            "fn": 0,
+            "fp": 0,
+            "tn": 4,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "mean_latency_ms": 3.525,
+          "n": 4,
+          "p95_latency_ms": 3.776,
+          "pr_auc": null,
+          "precision": 0.0,
+          "recall": 0.0,
+          "roc_auc": null
+        },
+        "id": {
+          "accuracy": 1.0,
+          "confusion": {
+            "fn": 0,
+            "fp": 0,
+            "tn": 1,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "mean_latency_ms": 3.491,
+          "n": 1,
+          "p95_latency_ms": 3.491,
+          "pr_auc": null,
+          "precision": 0.0,
+          "recall": 0.0,
+          "roc_auc": null
+        },
+        "ja": {
+          "accuracy": 1.0,
+          "confusion": {
+            "fn": 0,
+            "fp": 0,
+            "tn": 2,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "mean_latency_ms": 3.07,
+          "n": 2,
+          "p95_latency_ms": 3.138,
+          "pr_auc": null,
+          "precision": 0.0,
+          "recall": 0.0,
+          "roc_auc": null
+        },
+        "pt-BR": {
+          "accuracy": 0.5,
+          "confusion": {
+            "fn": 0,
+            "fp": 1,
+            "tn": 1,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "mean_latency_ms": 3.707,
+          "n": 2,
+          "p95_latency_ms": 4.067,
+          "pr_auc": null,
+          "precision": 0.0,
+          "recall": 0.0,
+          "roc_auc": null
+        },
+        "ru": {
+          "accuracy": 1.0,
+          "confusion": {
+            "fn": 0,
+            "fp": 0,
+            "tn": 18,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "mean_latency_ms": 3.399,
+          "n": 18,
+          "p95_latency_ms": 3.999,
+          "pr_auc": null,
+          "precision": 0.0,
+          "recall": 0.0,
+          "roc_auc": null
+        },
+        "th": {
+          "accuracy": 1.0,
+          "confusion": {
+            "fn": 0,
+            "fp": 0,
+            "tn": 4,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "mean_latency_ms": 3.207,
+          "n": 4,
+          "p95_latency_ms": 3.403,
+          "pr_auc": null,
+          "precision": 0.0,
+          "recall": 0.0,
+          "roc_auc": null
+        },
+        "zh": {
+          "accuracy": 1.0,
+          "confusion": {
+            "fn": 0,
+            "fp": 0,
+            "tn": 4,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "mean_latency_ms": 3.449,
+          "n": 4,
+          "p95_latency_ms": 4.759,
+          "pr_auc": null,
+          "precision": 0.0,
+          "recall": 0.0,
+          "roc_auc": null
+        }
+      },
+      "by_source": {
+        "deepset_prompt_injections": {
+          "accuracy": 0.303,
+          "confusion": {
+            "fn": 23,
+            "fp": 0,
+            "tn": 7,
+            "tp": 3
+          },
+          "f1": 0.2069,
+          "mean_latency_ms": 3.295,
+          "n": 33,
+          "p95_latency_ms": 3.511,
+          "pr_auc": 0.9523,
+          "precision": 1.0,
+          "recall": 0.1154,
+          "roc_auc": 0.8187
+        },
+        "jackhhao_jailbreak_classification": {
+          "accuracy": 0.9091,
+          "confusion": {
+            "fn": 0,
+            "fp": 1,
+            "tn": 10,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "mean_latency_ms": 3.854,
+          "n": 11,
+          "p95_latency_ms": 6.504,
+          "pr_auc": null,
+          "precision": 0.0,
+          "recall": 0.0,
+          "roc_auc": null
+        },
+        "lakera_gandalf_ignore_instructions": {
+          "accuracy": 0.59,
+          "confusion": {
+            "fn": 41,
+            "fp": 0,
+            "tn": 0,
+            "tp": 59
+          },
+          "f1": 0.7421,
+          "mean_latency_ms": 3.234,
+          "n": 100,
+          "p95_latency_ms": 3.53,
+          "pr_auc": null,
+          "precision": 1.0,
+          "recall": 0.59,
+          "roc_auc": null
+        },
+        "neuralchemy_prompt_injection": {
+          "accuracy": 0.2542,
+          "confusion": {
+            "fn": 304,
+            "fp": 4,
+            "tn": 41,
+            "tp": 64
+          },
+          "f1": 0.2936,
+          "mean_latency_ms": 3.374,
+          "n": 413,
+          "p95_latency_ms": 3.962,
+          "pr_auc": 0.9047,
+          "precision": 0.9412,
+          "recall": 0.1739,
+          "roc_auc": 0.4709
+        },
+        "openassistant_oasst1_benign": {
+          "accuracy": 0.9829,
+          "confusion": {
+            "fn": 0,
+            "fp": 3,
+            "tn": 172,
+            "tp": 0
+          },
+          "f1": 0.0,
+          "mean_latency_ms": 3.396,
+          "n": 175,
+          "p95_latency_ms": 3.937,
+          "pr_auc": null,
+          "precision": 0.0,
+          "recall": 0.0,
+          "roc_auc": null
+        },
+        "rubend18_chatgpt_jailbreak_prompts": {
+          "accuracy": 1.0,
+          "confusion": {
+            "fn": 0,
+            "fp": 0,
+            "tn": 0,
+            "tp": 2
+          },
+          "f1": 1.0,
+          "mean_latency_ms": 4.819,
+          "n": 2,
+          "p95_latency_ms": 5.268,
+          "pr_auc": null,
+          "precision": 1.0,
+          "recall": 1.0,
+          "roc_auc": null
+        },
+        "walledai_jailbreakhub": {
+          "accuracy": 0.5731,
+          "confusion": {
+            "fn": 21,
+            "fp": 125,
+            "tn": 98,
+            "tp": 98
+          },
+          "f1": 0.5731,
+          "mean_latency_ms": 6.376,
+          "n": 342,
+          "p95_latency_ms": 14.467,
+          "pr_auc": 0.6109,
+          "precision": 0.4395,
+          "recall": 0.8235,
+          "roc_auc": 0.7131
+        },
+        "xtram1_safe_guard_prompt_injection": {
+          "accuracy": 0.5858,
+          "confusion": {
+            "fn": 152,
+            "fp": 5,
+            "tn": 115,
+            "tp": 107
+          },
+          "f1": 0.5768,
+          "mean_latency_ms": 3.481,
+          "n": 379,
+          "p95_latency_ms": 4.064,
+          "pr_auc": 0.9306,
+          "precision": 0.9554,
+          "recall": 0.4131,
+          "roc_auc": 0.867
+        }
+      },
+      "confusion": {
+        "fn": 541,
+        "fp": 138,
+        "tn": 443,
+        "tp": 333
+      },
+      "f1": 0.4952,
+      "mean_latency_ms": 4.105,
+      "n": 1455,
+      "p95_latency_ms": 8.862,
+      "pr_auc": 0.6882,
+      "precision": 0.707,
+      "recall": 0.381,
+      "roc_auc": 0.5958
+    }
+  }
+}
