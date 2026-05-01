@@ -126,7 +126,9 @@ def _build_prompt_guard_2() -> ClassifierLike:
         backend="huggingface_sequence",
         model_id="meta-llama/Llama-Prompt-Guard-2-86M",
         preprocess=normalize_whitespace,
-        threshold=0.5,
+        injection_label_id=1,
+        # Tuned on val.parquet (see docs/input_classifier/models.md).
+        threshold=0.001,
         max_length=512,
     )
     return _wrap_filter_result_classifier(HFSequenceClassifier(spec))

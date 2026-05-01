@@ -27,7 +27,7 @@ The firewall is fail-closed: only fully-approved requests and responses pass thr
 
 | Stage | Label (in logs/dashboard) | Source |
 |---|---|---|
-| Input (all languages) | `protectai/deberta-v3-base-prompt-injection-v2` | Hugging Face `protectai/deberta-v3-base-prompt-injection-v2` |
+| Input (all languages, multilingual) | `Llama-Prompt-Guard-2-86M` (threshold=0.001) | Hugging Face `meta-llama/Llama-Prompt-Guard-2-86M` (gated — accept Meta's license) |
 | Response masking | regex PII masker (always on) | [llm_firewall/filters/pii.py](llm_firewall/filters/pii.py) |
 | Output | `Tiny-Toxic-Detector` | Hugging Face `AssistantsLab/Tiny-Toxic-Detector` |
 
