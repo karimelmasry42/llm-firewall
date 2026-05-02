@@ -88,10 +88,12 @@ Zooming into the green box from the pipeline above. This is the component doing 
 
 ```mermaid
 flowchart TB
-    P[Raw prompt] --> R[Language Router<br/>fasttext + lingua + heuristic]
-    R --> N[Whitespace normalize<br/>+ Llama tokenizer<br/>max 512 tokens · truncation logged]
-    N --> M[Llama-Prompt-Guard-2-86M<br/>86M params · BERT-style<br/>meta-llama/Llama-Prompt-Guard-2-86M]
-    M --> S[softmax → P injection<br/>blocking label index = 1]
+    P[Raw prompt] --> N[Whitespace normalize<br/>+ Llama tokenizer · no truncation]
+    N --> SHORT{≤ 512 tokens ?}
+    SHORT -->|yes| M[Llama-Prompt-Guard-2-86M<br/>86M params · BERT-style<br/>meta-llama/Llama-Prompt-Guard-2-86M]
+    SHORT -->|no| W[Sliding window:<br/>512-token chunks · 64-token overlap<br/>score every chunk]
+    W --> M
+    M --> S[softmax → P injection<br/>max across chunks if windowed]
     S --> GP{P ≥ 0.001 ?<br/>per-prompt threshold<br/>tuned on val.parquet}
     GP -->|yes| BL[BLOCKED<br/>refusal returned]
     GP -->|no| UP[upstream LLM]
@@ -106,17 +108,21 @@ flowchart TB
     style UP fill:#4285f4,stroke:#4285f4,color:#fff
     style AC fill:#0f9d58,stroke:#34a853,color:#fff
     style CT fill:#fbbc04,stroke:#fbbc04,color:#202124
+    style W fill:#fbbc04,stroke:#fbbc04,color:#202124
     style GP fill:#5f6368,stroke:#5f6368,color:#fff
     style GC fill:#5f6368,stroke:#5f6368,color:#fff
+    style SHORT fill:#5f6368,stroke:#5f6368,color:#fff
 ```
 
 Three things in this diagram are non-obvious and worth calling out:
 
-1. **`max_length=512` truncation is a known evasion vector.** A long benign-looking preamble can push the actual injection payload past the tokenizer's window, leaving the classifier looking at only the safe prefix. We log a warning every time truncation actually happens (see [`huggingface.py`](llm_firewall/classifiers/huggingface.py)) so an operator can spot exfiltration attempts even when the model itself is bypassed.
+1. **Long prompts get sliding-window chunking, not truncation.** Llama-Prompt-Guard-2-86M has a 512-token context. A naive implementation truncates anything longer — letting an attacker hide an injection payload behind a long benign preamble. Instead we tokenize without truncation; if the prompt exceeds 512 tokens we slide a 512-token window with 64-token overlap, score every chunk, and take **max** P(injection). A payload anywhere in the prompt is still caught. The operator gets a log line stating window count + max score for forensics. Implementation: [`huggingface.py`](llm_firewall/classifiers/huggingface.py).
 2. **Threshold = 0.001, not the default 0.5.** Llama-Prompt-Guard-2's score distribution is **peaky** — most injection probability mass sits below 0.01 even for true positives. A 9-point threshold sweep on `val.parquet` placed F1-optimal at **0.001**, which we baked into [`registry.py`](llm_firewall/classifiers/registry.py). This single calibration moved DavidTKeane F1 from 0.485 → **0.824** and JailbreakBench from 0.448 → **0.723** without retraining. See [Performance](#performance) for the sweep curve.
 3. **The score feeds two independent gates.** The same `P(injection)` is consumed by (a) the per-prompt check, which decides this turn, and (b) the conversation cumulative, which decides whether the conversation continues. A subtle multi-turn jailbreak can pass (a) on every individual turn but still trip (b) when the cumulative crosses **1.5**. See [Conversation-aware blocking](#conversation-aware-blocking).
 
-Implementation: spec lives in [`registry.py`](llm_firewall/classifiers/registry.py), inference in [`huggingface.py`](llm_firewall/classifiers/huggingface.py), and the dual-gate orchestration in [`_processing.py`](llm_firewall/api/_processing.py).
+Implementation: spec lives in [`registry.py`](llm_firewall/classifiers/registry.py), inference + chunking in [`huggingface.py`](llm_firewall/classifiers/huggingface.py), and the dual-gate orchestration in [`_processing.py`](llm_firewall/api/_processing.py).
+
+> **Note on the language router:** the system pipeline above shows a Language Router stage before the input classifier. Today it's largely vestigial — both `en` and `es` route to the same multilingual Llama-Prompt-Guard-2 spec, so the dispatch is effectively an identity function. It earns its place by (a) tagging every decision log with the detected language for telemetry/debugging and (b) leaving the plug-in point wired for any future language-specific specialist (e.g. a German-focused model). The previous SVM-era code actually had distinct English vs. Spanish models and the routing did real work; we left the wiring in place after the swap to keep that option open.
 
 ---
 
