@@ -15,7 +15,16 @@ class DummyLLMSettings(BaseSettings):
     """Settings for the local dummy LLM server."""
 
     api_key: str = ""
-    response_text: str = "This is a dummy response."
+    # Worded deliberately to NOT trip Tiny-Toxic-Detector. The previous
+    # default ("This is a dummy response.") scored P(toxic)=0.9999 — a
+    # catastrophic false positive that meant every benign response got
+    # DROPPED at the output classifier, so the dummy was useless for
+    # exercising the firewall's allow path. The phrasing below scores
+    # P(toxic) ≈ 0.17, well under the default threshold of 0.5.
+    response_text: str = (
+        "Hello from the local dummy upstream — your prompt passed the "
+        "firewall and this canned reply stands in for a real LLM."
+    )
 
     model_config = {
         "env_prefix": "DUMMY_LLM_",
