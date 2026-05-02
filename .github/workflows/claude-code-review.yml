@@ -21,8 +21,12 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      # write so the action can post inline review comments and a summary
+      # back onto the PR. With read-only the SDK call still completes but
+      # every comment-write tool call gets denied (permission_denials_count
+      # spiked to 23 on the previous run, which is why it produced no review).
+      pull-requests: write
+      issues: write
       id-token: write
 
     steps:
