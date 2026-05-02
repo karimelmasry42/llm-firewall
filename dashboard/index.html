@@ -298,6 +298,171 @@
             transform: translateY(-1px);
         }
 
+        /* === Conversation panel === */
+        .conv-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .conv-header-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .conv-meta {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .conv-id-badge {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 12px;
+            color: var(--text-secondary);
+            background: var(--bg-secondary);
+            padding: 4px 10px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+        }
+        .conv-cumulative-gauge {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .conv-cumulative-bar {
+            position: relative;
+            width: 180px;
+            height: 8px;
+            background: var(--bg-secondary);
+            border-radius: 999px;
+            overflow: hidden;
+            border: 1px solid var(--border);
+        }
+        .conv-cumulative-bar-fill {
+            position: absolute;
+            top: 0;
+            left: 0;
+            height: 100%;
+            background: linear-gradient(90deg, #34a853 0%, #fbbc04 60%, #ea4335 100%);
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+        .conv-cumulative-text {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 13px;
+            color: var(--text-primary);
+        }
+        .conv-new-button {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 8px 14px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            transition: all 0.15s;
+        }
+        .conv-new-button:hover {
+            border-color: rgba(59, 130, 246, 0.7);
+            color: #93c5fd;
+        }
+        .conv-history {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            min-height: 240px;
+            max-height: 480px;
+            overflow-y: auto;
+            padding: 16px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+        }
+        .conv-empty {
+            color: var(--text-secondary);
+            font-size: 14px;
+            text-align: center;
+            padding: 32px 0;
+        }
+        .conv-message {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            max-width: 80%;
+        }
+        .conv-message.role-user {
+            align-self: flex-end;
+        }
+        .conv-message.role-assistant {
+            align-self: flex-start;
+        }
+        .conv-message-bubble {
+            padding: 10px 14px;
+            border-radius: 14px;
+            font-size: 14px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+        .conv-message.role-user .conv-message-bubble {
+            background: rgba(59, 130, 246, 0.18);
+            border: 1px solid rgba(59, 130, 246, 0.45);
+            color: #dbeafe;
+        }
+        .conv-message.role-assistant .conv-message-bubble {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+        }
+        .conv-message.decision-blocked .conv-message-bubble {
+            background: rgba(234, 67, 53, 0.16);
+            border-color: rgba(234, 67, 53, 0.55);
+            color: #fecaca;
+        }
+        .conv-message.decision-dropped .conv-message-bubble {
+            background: rgba(251, 188, 4, 0.16);
+            border-color: rgba(251, 188, 4, 0.55);
+            color: #fde68a;
+        }
+        .conv-message-meta {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-family: 'SF Mono', Monaco, monospace;
+        }
+        .conv-message.role-user .conv-message-meta {
+            text-align: right;
+        }
+        .conv-input-row {
+            display: flex;
+            gap: 10px;
+            align-items: flex-end;
+        }
+        .conv-input {
+            flex: 1;
+            min-height: 56px;
+            max-height: 160px;
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 14px;
+            padding: 12px 14px;
+            line-height: 1.5;
+            resize: vertical;
+        }
+        .conv-input:focus {
+            outline: none;
+            border-color: rgba(59, 130, 246, 0.7);
+            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+        }
+        .conv-input:disabled {
+            opacity: 0.55;
+            cursor: not-allowed;
+        }
+
         .send-button:disabled {
             opacity: 0.65;
             cursor: wait;
@@ -662,6 +827,36 @@
                 </form>
             </section>
 
+            <section class="panel conv-panel" id="conversation-panel">
+                <div class="panel-header">
+                    <div>
+                        <div class="panel-title">💬 Conversation Mode</div>
+                        <div class="panel-subtitle">Multi-turn chat with cumulative-score gating. Each prompt adds to a running total; once the total crosses the conversation threshold the firewall blocks every further prompt until you start a new conversation.</div>
+                    </div>
+                </div>
+
+                <div class="conv-header-row">
+                    <div class="conv-meta">
+                        <span class="conv-id-badge" id="conv-id-badge">no conversation yet</span>
+                        <div class="conv-cumulative-gauge">
+                            <span class="conv-cumulative-text">cumulative:</span>
+                            <div class="conv-cumulative-bar"><div class="conv-cumulative-bar-fill" id="conv-bar-fill"></div></div>
+                            <span class="conv-cumulative-text" id="conv-cumulative-text">0.0000 / —</span>
+                        </div>
+                    </div>
+                    <button class="conv-new-button" id="conv-new-button" type="button">＋ New conversation</button>
+                </div>
+
+                <div class="conv-history" id="conv-history">
+                    <div class="conv-empty" id="conv-empty">Start typing below — every prompt is scored, and the bar above tracks the conversation's adversarial trajectory.</div>
+                </div>
+
+                <form class="conv-input-row" id="conv-form">
+                    <textarea class="conv-input" id="conv-input" placeholder="Send a message…" rows="2"></textarea>
+                    <button class="send-button" id="conv-send" type="submit">Send</button>
+                </form>
+            </section>
+
             <section class="panel">
                 <div class="panel-header">
                     <div>
@@ -707,7 +902,7 @@
             </div>
             <div class="stat-card latency">
                 <div class="stat-icon">⏱️</div>
-                <div class="stat-label">Avg Total Latency</div>
+                <div class="stat-label">Avg Classifier Latency</div>
                 <div class="stat-value" id="stat-latency-average">0.0 ms</div>
             </div>
         </div>
@@ -832,6 +1027,31 @@
                 `Output models: ${(config.output_models || []).join(', ') || 'None loaded'}`;
         }
 
+        // Build the inner HTML for one log row. Used by both the bulk render
+        // (snapshot / filter change) and the surgical prepend on SSE events.
+        function logRowHtml(log, opts) {
+            const scores = log.scores || {};
+            const latencies = log.latencies_ms || {};
+            const chips = Object.entries(scores)
+                .filter(([k]) => shouldDisplayClassifierChip(k))
+                .map(([k, v]) => getScoreChip(k, v, latencies[k]));
+            const totalLatencyChip = getTotalLatencyChip(log.total_latency_ms);
+            if (totalLatencyChip) chips.push(totalLatencyChip);
+            const scoreHtml = chips.join('');
+            const cls = opts && opts.fresh ? ' class="new-entry"' : '';
+            return `
+                <tr${cls} data-log-id="${escapeHtml(log.id || '')}">
+                    <td><span class="timestamp">${formatTimestamp(log.timestamp)}</span></td>
+                    <td>${getDecisionBadge(log.decision)}</td>
+                    <td><div class="text-truncate" title="${escapeHtml(log.prompt)}">${escapeHtml(log.prompt)}</div></td>
+                    <td><div class="text-truncate" title="${escapeHtml(log.response)}">${escapeHtml(log.response)}</div></td>
+                    <td><div class="scores-bar">${scoreHtml}</div></td>
+                    <td><div class="detail-text" title="${escapeHtml(log.detail)}">${escapeHtml(log.detail)}</div></td>
+                </tr>`;
+        }
+
+        // Full re-render. Used on snapshot, filter change, and manual refresh —
+        // not on every incoming SSE event (those use prependLog instead).
         function renderLogs() {
             const tbody = document.getElementById('log-body');
             const filtered = currentFilter === 'ALL'
@@ -849,26 +1069,32 @@
                 return;
             }
 
-            tbody.innerHTML = filtered.map(log => {
-                const scores = log.scores || {};
-                const latencies = log.latencies_ms || {};
-                const chips = Object.entries(scores)
-                    .filter(([k]) => shouldDisplayClassifierChip(k))
-                    .map(([k, v]) => getScoreChip(k, v, latencies[k]));
-                const totalLatencyChip = getTotalLatencyChip(log.total_latency_ms);
-                if (totalLatencyChip) chips.push(totalLatencyChip);
-                const scoreHtml = chips.join('');
+            // No "new-entry" class on bulk render — the highlight animation
+            // is reserved for genuinely fresh rows arriving via SSE.
+            tbody.innerHTML = filtered.map(log => logRowHtml(log, { fresh: false })).join('');
+        }
 
-                return `
-                    <tr class="new-entry">
-                        <td><span class="timestamp">${formatTimestamp(log.timestamp)}</span></td>
-                        <td>${getDecisionBadge(log.decision)}</td>
-                        <td><div class="text-truncate" title="${escapeHtml(log.prompt)}">${escapeHtml(log.prompt)}</div></td>
-                        <td><div class="text-truncate" title="${escapeHtml(log.response)}">${escapeHtml(log.response)}</div></td>
-                        <td><div class="scores-bar">${scoreHtml}</div></td>
-                        <td><div class="detail-text" title="${escapeHtml(log.detail)}">${escapeHtml(log.detail)}</div></td>
-                    </tr>`;
-            }).join('');
+        // Surgical insert for a single new decision. Drops the last row if
+        // the visible cap is exceeded so the page doesn't grow without bound.
+        function prependLog(entry) {
+            // Ignore rows that the current filter wouldn't show — but still
+            // refresh the empty-state placeholder if needed.
+            if (currentFilter !== 'ALL' && entry.decision !== currentFilter) {
+                return;
+            }
+            const tbody = document.getElementById('log-body');
+            const empty = tbody.querySelector('.empty-state');
+            if (empty) {
+                tbody.innerHTML = '';
+            }
+            const tmp = document.createElement('tbody');
+            tmp.innerHTML = logRowHtml(entry, { fresh: true });
+            const newRow = tmp.firstElementChild;
+            if (newRow) tbody.insertBefore(newRow, tbody.firstChild);
+            // Cap at 100 visible rows.
+            while (tbody.children.length > 100) {
+                tbody.removeChild(tbody.lastElementChild);
+            }
         }
 
         async function fetchStats() {
@@ -880,7 +1106,7 @@
                 document.getElementById('stat-blocked').textContent = data.blocked || 0;
                 document.getElementById('stat-dropped').textContent = data.dropped || 0;
                 document.getElementById('stat-latency-average').textContent =
-                    formatLatency(data.average_total_latency_ms || 0);
+                    formatLatency(data.average_classifier_latency_ms || 0);
             } catch (e) {
                 console.warn('Failed to fetch stats:', e);
             }
@@ -891,6 +1117,13 @@
                 const resp = await fetch(`${API_BASE}/api/config`);
                 const data = await resp.json();
                 renderConfig(data);
+                // Pull the conversation threshold out of the same response
+                // so we don't have to fetch /api/config a second time on
+                // every dashboard load just to scale the gauge.
+                if (typeof data.conversation_cumulative_threshold === 'number') {
+                    conversationCumulativeThreshold = data.conversation_cumulative_threshold;
+                    renderConversationGauge(0, conversationCumulativeThreshold);
+                }
             } catch (e) {
                 console.warn('Failed to fetch runtime config:', e);
             }
@@ -958,14 +1191,253 @@
             }
         }
 
+        // Pull a fresh snapshot from REST. Used as a fallback when the SSE
+        // stream isn't available (very old browsers) and as the click handler
+        // for the manual refresh button. The live path uses subscribeToStream().
         async function refreshData() {
             await Promise.all([fetchStats(), fetchLogs()]);
         }
 
-        // Auto-refresh every 3 seconds
+        /* ============================================================== */
+        /* Server-Sent Events — live decision feed without polling         */
+        /* ============================================================== */
+
+        let sseSource = null;
+        let sseRetryAttempts = 0;
+        let sseLatestStats = null;
+
+        function applyStats(stats) {
+            if (!stats) return;
+            sseLatestStats = stats;
+            document.getElementById('stat-total').textContent = stats.total || 0;
+            document.getElementById('stat-allowed').textContent = stats.allowed || 0;
+            document.getElementById('stat-blocked').textContent = stats.blocked || 0;
+            document.getElementById('stat-dropped').textContent = stats.dropped || 0;
+            document.getElementById('stat-latency-average').textContent =
+                formatLatency(stats.average_classifier_latency_ms || 0);
+        }
+
+        function handleStreamEvent(eventName, data) {
+            if (eventName === 'snapshot') {
+                allLogs = Array.isArray(data.logs) ? data.logs : [];
+                renderLogs();
+                applyStats(data.stats);
+            } else if (eventName === 'decision') {
+                const entry = data?.entry;
+                if (!entry) return;
+                allLogs.unshift(entry);
+                if (allLogs.length > 100) allLogs.length = 100;
+                // Surgical prepend: only the one new row animates in,
+                // the rest of the table doesn't repaint.
+                prependLog(entry);
+                // The server attaches authoritative aggregate stats to
+                // every decision event; trust those instead of a local
+                // running tally (which drifts once the backend log starts
+                // evicting at MAX_LOG_SIZE).
+                if (data.stats) applyStats(data.stats);
+            }
+            // 'heartbeat' is intentionally a no-op — the connection's just alive.
+        }
+
+        function subscribeToStream() {
+            if (typeof EventSource === 'undefined') {
+                // Last-resort polling fallback; runs at 30s, not 3s.
+                setInterval(refreshData, 30000);
+                refreshData();
+                return;
+            }
+
+            try { sseSource && sseSource.close(); } catch (_) {}
+
+            const url = `${API_BASE}/api/stream`;
+            sseSource = new EventSource(url);
+
+            const onEvent = (name) => (ev) => {
+                sseRetryAttempts = 0;
+                let data = {};
+                try { data = JSON.parse(ev.data || '{}'); } catch (_) {}
+                handleStreamEvent(name, data);
+            };
+            sseSource.addEventListener('snapshot', onEvent('snapshot'));
+            sseSource.addEventListener('decision', onEvent('decision'));
+            sseSource.addEventListener('heartbeat', onEvent('heartbeat'));
+
+            sseSource.onerror = () => {
+                // EventSource auto-reconnects with a small backoff; we just
+                // close + reopen on persistent failure to avoid orphan
+                // sockets. Cap attempts so a permanently-down server doesn't
+                // hammer reconnects.
+                sseRetryAttempts += 1;
+                if (sseRetryAttempts > 8) {
+                    try { sseSource.close(); } catch (_) {}
+                    sseSource = null;
+                    setTimeout(subscribeToStream, 5000);
+                }
+            };
+        }
+
+        /* ============================================================== */
+        /* Conversation mode — multi-turn chat with cumulative-score gate */
+        /* ============================================================== */
+
+        // The cumulative threshold the backend enforces. We probe it on
+        // first send by inspecting the conversation summary the API returns.
+        let conversationId = null;
+        let conversationCumulativeThreshold = null;
+
+        function renderConversationGauge(cumulative, threshold) {
+            const fill = document.getElementById('conv-bar-fill');
+            const text = document.getElementById('conv-cumulative-text');
+            const cum = Number(cumulative) || 0;
+            const th = Number(threshold) || null;
+            const pct = th ? Math.min(100, (cum / th) * 100) : 0;
+            fill.style.width = pct.toFixed(1) + '%';
+            text.textContent = th
+                ? `${cum.toFixed(4)} / ${th.toFixed(2)} (${pct.toFixed(0)}%)`
+                : `${cum.toFixed(4)} / —`;
+        }
+
+        function appendConversationMessage(role, content, opts = {}) {
+            const history = document.getElementById('conv-history');
+            const empty = document.getElementById('conv-empty');
+            if (empty) empty.remove();
+
+            const msg = document.createElement('div');
+            msg.className = `conv-message role-${role}`;
+            if (opts.decision === 'BLOCKED') msg.classList.add('decision-blocked');
+            if (opts.decision === 'DROPPED') msg.classList.add('decision-dropped');
+
+            const bubble = document.createElement('div');
+            bubble.className = 'conv-message-bubble';
+            bubble.textContent = content;
+            msg.appendChild(bubble);
+
+            if (opts.meta) {
+                const meta = document.createElement('div');
+                meta.className = 'conv-message-meta';
+                meta.textContent = opts.meta;
+                msg.appendChild(meta);
+            }
+
+            history.appendChild(msg);
+            history.scrollTop = history.scrollHeight;
+        }
+
+        async function startNewConversation() {
+            try {
+                // Best-effort reset of the previous conversation so we
+                // don't leave it in the LRU until eviction. The DELETE
+                // endpoint exists for exactly this lifecycle.
+                if (conversationId) {
+                    try {
+                        await fetch(
+                            `${API_BASE}/v1/conversations/${encodeURIComponent(conversationId)}`,
+                            { method: 'DELETE' }
+                        );
+                    } catch (_) { /* best effort */ }
+                }
+                const resp = await fetch(`${API_BASE}/v1/conversations`, { method: 'POST' });
+                const data = await resp.json();
+                conversationId = data.id;
+                // Reset the per-turn delta baseline; otherwise the next
+                // turn would compute Δ against the previous conversation's
+                // cumulative score and report a (usually negative) bogus value.
+                window._lastCumulative = 0;
+                document.getElementById('conv-id-badge').textContent = conversationId;
+                renderConversationGauge(0, conversationCumulativeThreshold);
+                document.getElementById('conv-history').innerHTML =
+                    '<div class="conv-empty" id="conv-empty">New conversation started. The cumulative score resets every time you click + New conversation.</div>';
+                document.getElementById('conv-input').disabled = false;
+                document.getElementById('conv-send').disabled = false;
+            } catch (e) {
+                console.warn('Failed to start conversation:', e);
+            }
+        }
+
+        async function sendConversationMessage(event) {
+            event.preventDefault();
+            const input = document.getElementById('conv-input');
+            const sendBtn = document.getElementById('conv-send');
+            const prompt = input.value.trim();
+            if (!prompt) return;
+
+            // Lazy-create the conversation on first send so users don't
+            // have to click "+ New" before typing the first message.
+            if (!conversationId) {
+                await startNewConversation();
+            }
+
+            appendConversationMessage('user', prompt);
+            input.value = '';
+            input.disabled = true;
+            sendBtn.disabled = true;
+
+            try {
+                const resp = await fetch(`${API_BASE}/v1/chat/completions`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: runtimeConfig?.default_model_id || FALLBACK_MODEL,
+                        messages: [{ role: 'user', content: prompt }],
+                        conversation_id: conversationId,
+                    }),
+                });
+                const data = await resp.json();
+                if (!resp.ok) throw new Error(data?.error?.message || 'Request failed');
+
+                const content = data?.choices?.[0]?.message?.content || '(empty)';
+                const conv = data?.conversation || {};
+                const refusalMessage = runtimeConfig?.refusal_message || 'Sorry, I cannot answer this prompt';
+                let decision = 'ALLOWED';
+                if (content === refusalMessage) {
+                    // Distinguish a conversation-gate block (BLOCKED, the
+                    // whole conversation is locked) from a per-turn refusal
+                    // (DROPPED, only this prompt failed). The backend
+                    // surfaces the gate via `failed_filters`.
+                    const failed = Array.isArray(data.failed_filters) ? data.failed_filters : [];
+                    decision = (failed.includes('conversation_cumulative') || conv.blocked)
+                        ? 'BLOCKED'
+                        : 'DROPPED';
+                }
+
+                const meta = `score this turn: Δ=${(conv.cumulative_score - (window._lastCumulative || 0)).toFixed(4)} • cumulative ${conv.cumulative_score?.toFixed(4)} / ${conversationCumulativeThreshold ?? '—'}`;
+                window._lastCumulative = conv.cumulative_score || 0;
+                appendConversationMessage('assistant', content, { decision, meta });
+                renderConversationGauge(conv.cumulative_score || 0, conversationCumulativeThreshold);
+
+                if (conv.blocked) {
+                    appendConversationMessage(
+                        'assistant',
+                        `🚫 Conversation gated. ${conv.blocked_reason || 'Cumulative score exceeded the configured threshold.'} Click "+ New conversation" to start over.`,
+                        { decision: 'BLOCKED' }
+                    );
+                    // Lock the form for this conversation; the only way out is
+                    // clicking "+ New conversation" which re-enables both.
+                    document.getElementById('conv-input').disabled = true;
+                    document.getElementById('conv-send').disabled = true;
+                    return;
+                }
+                // Conversation still active — re-enable for the next turn.
+                input.disabled = false;
+                sendBtn.disabled = false;
+                input.focus();
+            } catch (e) {
+                appendConversationMessage('assistant', e.message || 'Request failed.', { decision: 'BLOCKED' });
+                input.disabled = false;
+                sendBtn.disabled = false;
+            }
+        }
+
+        document.getElementById('conv-form').addEventListener('submit', sendConversationMessage);
+        document.getElementById('conv-new-button').addEventListener('click', startNewConversation);
+
+        // Initial load: pull config once (it's static — fetchConfig also
+        // populates the conversation gauge threshold from the same
+        // response so we don't double-fetch). Then subscribe to the SSE
+        // stream which gives us a snapshot followed by push events.
+        // No polling — the dashboard is silent while idle.
         fetchConfig();
-        refreshData();
-        setInterval(refreshData, 3000);
+        subscribeToStream();
     </script>
 </body>
 </html>

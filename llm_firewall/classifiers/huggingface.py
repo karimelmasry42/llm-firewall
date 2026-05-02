@@ -365,42 +365,57 @@ class HFSequenceClassifier:
             f"id2label={id2label!r}"
         )
 
+    # Overlap (in tokens) between adjacent windows when a long prompt is
+    # chunked. Set so an injection payload spanning a window boundary still
+    # appears wholly in at least one window. 64 tokens ≈ a sentence or two
+    # — enough for typical "ignore previous instructions" payloads.
+    _CHUNK_OVERLAP_TOKENS = 64
+
     def evaluate(self, text: str) -> FilterResult:
         started_at = perf_counter()
         normalized_text = self._preprocess(text)
-        inputs = self._tokenizer(
-            normalized_text,
-            return_tensors="pt",
-            truncation=True,
-            max_length=self._max_length,
-            padding=True,
-        ).to(self._device)
-        # Warn when truncation actually happened. A long benign-looking
-        # preamble could push an injection payload past `max_length` and the
-        # classifier would only see the safe prefix — useful evasion vector
-        # to surface in logs even if we still have to truncate.
-        input_len = int(inputs["input_ids"].shape[-1])
-        if input_len >= self._max_length:
+        # Tokenize WITHOUT truncation first so we know the real length and
+        # can run a sliding window if the prompt would otherwise be cut.
+        # The classifier model still has a fixed max_length; we just refuse
+        # to silently drop tokens past it.
+        full = self._tokenizer(normalized_text, return_tensors="pt", truncation=False)
+        full_ids = full["input_ids"]
+        full_mask = full.get("attention_mask")
+        full_len = int(full_ids.shape[-1])
+
+        # Fast path: short-enough prompts go through a single forward pass,
+        # behaviour identical to the pre-chunking implementation.
+        if full_len <= self._max_length:
+            blocking_score = self._score_window(full_ids, full_mask)
+        else:
+            # Sliding window: stride = max_length - overlap. Take max
+            # P(injection) across all windows so an injection anywhere in
+            # the prompt — head, tail, or middle — is caught instead of
+            # being hidden behind a benign preamble that fills the model's
+            # context window.
+            stride = max(1, self._max_length - self._CHUNK_OVERLAP_TOKENS)
+            scores: list[float] = []
+            offset = 0
+            while offset < full_len:
+                end = min(offset + self._max_length, full_len)
+                window_ids = full_ids[:, offset:end]
+                window_mask = full_mask[:, offset:end] if full_mask is not None else None
+                scores.append(self._score_window(window_ids, window_mask))
+                if end == full_len:
+                    break
+                offset += stride
+            blocking_score = max(scores) if scores else 0.0
             logger.warning(
-                "%s: input truncated to max_length=%d tokens; the tail of the "
-                "prompt was not seen by the classifier (potential evasion vector)",
+                "%s: input was %d tokens (> max_length=%d); scored as "
+                "%d overlapping windows (overlap=%d), max P(injection)=%.4f",
                 self.name,
+                full_len,
                 self._max_length,
+                len(scores),
+                self._CHUNK_OVERLAP_TOKENS,
+                blocking_score,
             )
-        if "token_type_ids" in inputs and not getattr(
-            self._model.config, "type_vocab_size", 0
-        ):
-            del inputs["token_type_ids"]
 
-        with self._torch.no_grad():
-            logits = self._model(**inputs).logits
-
-        # Softmax across labels; take the configured blocking label's prob.
-        # `confidence` in the FilterResult is always P(injection) regardless
-        # of pass/fail so downstream metrics (ROC-AUC, PR-AUC) and the detail
-        # string both speak the same number.
-        probs = self._torch.softmax(logits, dim=-1).squeeze(0).tolist()
-        blocking_score = float(probs[self._block_idx])
         blocked = blocking_score > self._threshold
         latency_ms = round((perf_counter() - started_at) * 1000, 3)
 
@@ -412,3 +427,21 @@ class HFSequenceClassifier:
             latency_ms=latency_ms,
             detail=f"[{verdict}] {self.name} | P(injection)={blocking_score:.1%}",
         )
+
+    def _score_window(self, input_ids, attention_mask) -> float:
+        """Run one forward pass on a (batch=1) tensor of token ids and
+        return P(injection). Caller guarantees `input_ids.shape[-1]` is
+        ≤ max_length."""
+        kwargs = {"input_ids": input_ids.to(self._device)}
+        if attention_mask is not None:
+            kwargs["attention_mask"] = attention_mask.to(self._device)
+        # Some BERT-style configs (Llama-Prompt-Guard-2 included) don't
+        # need token_type_ids; suppress them if the tokenizer emitted any.
+        with self._torch.no_grad():
+            logits = self._model(**kwargs).logits
+        # Softmax across labels; pull out the configured blocking-label prob.
+        # `confidence` in the FilterResult is always P(injection) regardless
+        # of pass/fail so downstream metrics (ROC-AUC, PR-AUC) and the detail
+        # string both speak the same number.
+        probs = self._torch.softmax(logits, dim=-1).squeeze(0).tolist()
+        return float(probs[self._block_idx])

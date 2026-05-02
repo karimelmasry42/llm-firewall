@@ -12,6 +12,7 @@ import uuid
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+from llm_firewall.api import conversations as conv_state
 from llm_firewall.api._processing import (
     process_chat_completion,
     resolve_upstream_api_key,
@@ -128,6 +129,46 @@ async def retrieve_model(model_id: str, request: Request):
         payload = _build_model_object(model_id)
 
     return JSONResponse(content=payload)
+
+
+@router.post("/v1/conversations")
+async def create_conversation(request: Request):
+    """Start a new conversation. Returns a fresh conversation_id."""
+    conv = conv_state.get_or_create(request.app, None)
+    return JSONResponse(content=conv.to_summary())
+
+
+@router.get("/v1/conversations")
+async def list_conversations(request: Request, limit: int = 50):
+    """Most-recently-used conversations (summaries only)."""
+    if limit < 1 or limit > 500:
+        return JSONResponse(
+            status_code=400,
+            content={"error": {"message": "`limit` must be between 1 and 500."}},
+        )
+    return JSONResponse(content=conv_state.list_summaries(request.app, limit=limit))
+
+
+@router.get("/v1/conversations/{conversation_id}")
+async def get_conversation(request: Request, conversation_id: str):
+    """Full state of one conversation, including per-turn history."""
+    conv = conv_state.get(request.app, conversation_id)
+    if conv is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": {"message": f"Conversation {conversation_id} not found."}},
+        )
+    return JSONResponse(content=conv.to_full())
+
+
+@router.delete("/v1/conversations/{conversation_id}")
+async def delete_conversation(request: Request, conversation_id: str):
+    """Reset a conversation. Use this for the dashboard's 'New conversation' button."""
+    deleted = conv_state.reset(request.app, conversation_id)
+    return JSONResponse(
+        status_code=200 if deleted else 404,
+        content={"deleted": deleted, "conversation_id": conversation_id},
+    )
 
 
 @router.post("/v1/chat/completions/batch")

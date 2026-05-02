@@ -18,7 +18,14 @@ class _FakeTokenizerOutput(dict):
 
 
 class _FakeTokenizer:
-    """Mimics enough of an `AutoTokenizer` instance for the runtime."""
+    """Mimics enough of an `AutoTokenizer` instance for the runtime.
+
+    By default returns 3 tokens for any input. Tests exercising the
+    sliding-window chunking path can set `_FakeTokenizer.next_length`
+    so they can simulate a long prompt without a real tokenizer.
+    """
+
+    next_length: int | None = None
 
     @classmethod
     def from_pretrained(cls, _model_id, **_kwargs):
@@ -28,7 +35,10 @@ class _FakeTokenizer:
         # Return a minimal dict; the model stub ignores its contents.
         import torch
 
-        return _FakeTokenizerOutput(input_ids=torch.tensor([[1, 2, 3]]))
+        n = type(self).next_length if type(self).next_length is not None else 3
+        ids = torch.arange(1, n + 1).unsqueeze(0)  # shape (1, n)
+        mask = torch.ones_like(ids)
+        return _FakeTokenizerOutput(input_ids=ids, attention_mask=mask)
 
 
 class _FakeModelConfig:
@@ -195,30 +205,136 @@ def test_hf_sequence_classifier_rejects_unresolvable_label(patch_transformers):
         HFSequenceClassifier(spec)
 
 
-def test_hf_sequence_classifier_logs_warning_on_truncation(
+def test_hf_sequence_classifier_logs_warning_when_chunking(
     patch_transformers, caplog
 ):
-    """Long inputs should log a WARNING that they hit `max_length` (evasion)."""
+    """Long inputs should be sliding-windowed and the operator notified.
+
+    Pre-chunking we silently truncated and just logged. Now we score the
+    whole prompt in overlapping windows and the warning includes the
+    window count + max P(injection) so the operator knows how the score
+    was derived.
+    """
     import logging
 
     from llm_firewall.classifiers.huggingface import HFSequenceClassifier
 
     spec = ClassifierSpec(
-        name="test_hf_truncate",
+        name="test_hf_chunked",
         backend="huggingface_sequence",
         model_id="dummy",
         preprocess=normalize_whitespace,
-        max_length=3,  # the fake tokenizer always returns 3 tokens
+        max_length=8,
         threshold=0.5,
     )
     clf = HFSequenceClassifier(spec)
-    with caplog.at_level(logging.WARNING, logger="llm_firewall.classifiers.huggingface"):
-        clf.evaluate("any text — fake tokenizer ignores content")
-    truncation_warnings = [
+    # Force the next tokenize() call to produce more than max_length tokens
+    # so the chunking branch fires.
+    _FakeTokenizer.next_length = 24
+    try:
+        with caplog.at_level(
+            logging.WARNING, logger="llm_firewall.classifiers.huggingface"
+        ):
+            result = clf.evaluate("any text — fake tokenizer ignores content")
+    finally:
+        _FakeTokenizer.next_length = None
+
+    chunking_warnings = [
         r for r in caplog.records
-        if r.levelno == logging.WARNING and "truncated" in r.message
+        if r.levelno == logging.WARNING
+        and "scored as" in r.message
+        and "overlapping windows" in r.message
     ]
-    assert truncation_warnings, "expected a truncation warning to be logged"
+    assert chunking_warnings, (
+        "expected a chunking warning when input exceeds max_length"
+    )
+    # The fake model emits softmax≈1 at the blocking index regardless of
+    # input, so a chunked long prompt with an injection signal anywhere
+    # should still be blocked.
+    assert result.passed is False
+    assert result.confidence > 0.9
+
+
+def test_hf_sequence_classifier_short_prompts_unchanged_by_chunking(
+    patch_transformers, caplog
+):
+    """Prompts within max_length take the fast path and emit no warning."""
+    import logging
+
+    from llm_firewall.classifiers.huggingface import HFSequenceClassifier
+
+    spec = ClassifierSpec(
+        name="test_hf_short",
+        backend="huggingface_sequence",
+        model_id="dummy",
+        preprocess=normalize_whitespace,
+        max_length=64,
+        threshold=0.5,
+    )
+    clf = HFSequenceClassifier(spec)
+    _FakeTokenizer.next_length = 3  # the default — well under max_length=64
+    try:
+        with caplog.at_level(
+            logging.WARNING, logger="llm_firewall.classifiers.huggingface"
+        ):
+            result = clf.evaluate("a short prompt")
+    finally:
+        _FakeTokenizer.next_length = None
+
+    chunking_warnings = [
+        r for r in caplog.records
+        if r.levelno == logging.WARNING and "overlapping windows" in r.message
+    ]
+    assert chunking_warnings == [], (
+        "short prompts must not trigger the chunking warning — fast path only"
+    )
+    assert result.passed is False  # fake model emits dominant logit at idx 1
+
+
+def test_hf_sequence_classifier_chunk_count_matches_overlap_formula(
+    patch_transformers
+):
+    """A 24-token prompt with max_length=8 and overlap=64 (the default,
+    capped to 1) should produce ceil(24/8) = 3 windows when overlap >=
+    max_length forces stride=1; for the realistic max_length=8/overlap=64
+    case stride is clamped to 1 to make sure chunking still progresses
+    instead of looping forever. We test the shipped overlap-64 default
+    against a real-ish ratio."""
+    from llm_firewall.classifiers.huggingface import HFSequenceClassifier
+
+    spec = ClassifierSpec(
+        name="test_hf_chunk_ratio",
+        backend="huggingface_sequence",
+        model_id="dummy",
+        preprocess=normalize_whitespace,
+        max_length=512,  # the production value
+        threshold=0.5,
+    )
+    clf = HFSequenceClassifier(spec)
+
+    # 1500 tokens at max=512, overlap=64 → stride=448 → windows starting at
+    # 0, 448, 896, 1344 → 4 windows.
+    _FakeTokenizer.next_length = 1500
+    try:
+        # Spy on _score_window to count invocations.
+        calls = []
+        original = clf._score_window
+
+        def spy(input_ids, attention_mask):
+            calls.append(int(input_ids.shape[-1]))
+            return original(input_ids, attention_mask)
+
+        clf._score_window = spy  # type: ignore[method-assign]
+        clf.evaluate("doesn't matter")
+    finally:
+        _FakeTokenizer.next_length = None
+
+    assert len(calls) == 4, f"expected 4 windows for 1500 tokens, got {len(calls)}"
+    # Every window except possibly the last must be exactly max_length;
+    # the last is min(max_length, remaining).
+    for length in calls[:-1]:
+        assert length == 512
+    assert calls[-1] <= 512
 
 
 def test_hf_sequence_classifier_resolves_label_before_device_move(

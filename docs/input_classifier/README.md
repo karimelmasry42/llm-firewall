@@ -41,22 +41,26 @@ of the build.
 Rather than train from scratch immediately, we benchmarked off-the-shelf
 prompt-injection classifiers against the SVM baseline. The current bake-off:
 
-| Model | in-dist F1 | DavidTKeane F1 | in-dist ROC-AUC |
+| Model | in-dist F1 | DavidTKeane F1 | JailbreakBench F1 |
 |---|---|---|---|
-| Old SVM (English) | 0.712 | 0.447 | 0.758 |
-| Old SVM (Spanish) | 0.495 | 0.169 | 0.596 |
-| `protectai/deberta-v3-base-prompt-injection-v2` (shipped) | **0.885** | **0.661** | **0.944** |
-| `meta-llama/Llama-Prompt-Guard-2-86M` | 0.705 | 0.485 | 0.833 |
+| Old SVM (English) | 0.712 | 0.447 | 0.489 |
+| Old SVM (Spanish) | 0.495 | 0.169 | 0.140 |
+| `protectai/deberta-v3-base-prompt-injection-v2` (English-only) | **0.885** | 0.661 | 0.000 |
+| **`meta-llama/Llama-Prompt-Guard-2-86M` @ tuned thr=0.001 (shipped)** | 0.839 | **0.824** | **0.723** |
 
-protectai/deberta wins at the default threshold (0.5) on every metric we
-gate on. Llama-Prompt-Guard-2-86M (Meta's multilingual classifier — gated;
-requires accepting the license at the model card and `huggingface-cli
-login`) scored *higher* held-out ROC-AUC and PR-AUC, meaning its score
-ranks prompts better — but its default threshold is conservative on our
-prompt mix, costing recall and dragging F1 down. Threshold-tuning it is a
-follow-up; if it then beats protectai, swapping is a two-line change in
-[`registry.py`](../../llm_firewall/classifiers/registry.py). See
-[`models.md`](models.md) for the full breakdown.
+The shipped model is genuinely multilingual — Meta trained it on 8
+languages of adversarial data. At the default threshold (0.5) it scored
+poorly because its score distribution is peaky (most injection mass
+below 0.01); a sweep over `val.parquet` found `threshold=0.001` lifts F1
+on every held-out set. The trade-off vs protectai/deberta is a 4.6-point
+in-distribution loss (mostly English) for a 16.3-point DavidTKeane
+(multilingual) gain and a 72.3-point JailbreakBench gain.
+
+`protectai/deberta-v3-base-prompt-injection-v2` is retained in the eval
+harness as a strong English baseline. `Llama-Prompt-Guard-2-86M` is
+gated — requires accepting Meta's license and `huggingface-cli login`.
+See [`models.md`](models.md) for the full bake-off and threshold-sweep
+table.
 
 ### 3. Training (skipped for v1)
 
@@ -101,7 +105,7 @@ key.
 - ✅ Dataset pipeline + committed parquets + manifest
 - ✅ `HFSequenceClassifier` runtime (handles any `AutoModelForSequenceClassification` checkpoint)
 - ✅ Eval harness + committed reports for SVM (English + Spanish), protectai/deberta, and Llama-Prompt-Guard-2-86M
-- ✅ `protectai/deberta-v3-base-prompt-injection-v2` shipped as v1 input classifier
-- 🔜 Threshold-tune Llama-Prompt-Guard-2-86M and re-bake-off (it has higher held-out AUC; threshold tuning may flip the choice)
+- ✅ `meta-llama/Llama-Prompt-Guard-2-86M` (multilingual, threshold=0.001) shipped as v1 input classifier
+- ✅ Threshold sweep documented and committed; protectai/deberta retained as English baseline
+- 🔜 Per-deployment configurable threshold via env var (currently hardcoded in the spec)
 - 🔜 Native-language Spanish adversarial training data (separate task)
-- 🔜 Calibrated probability + per-deployment configurable threshold

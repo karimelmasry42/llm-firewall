@@ -1,105 +1,293 @@
 # LLM Firewall
 
-An OpenAI-compatible proxy that screens prompts before they reach an upstream model and screens model responses before they are shown to the user. The goal is real-time semantic filtering for prompt injection, jailbreaks, system-prompt extraction, and toxic outputs — using only the inputs and outputs of a black-box LLM.
+> **A real-time, multilingual, conversation-aware firewall for any OpenAI-compatible LLM.** Drop it in front of your model, get prompt-injection / jailbreak / system-prompt-extraction protection in five lines of code, and watch every decision live in the built-in dashboard.
 
-The firewall exposes `/v1/chat/completions` (single + batch), `/v1/models`, and a browser dashboard at `/dashboard`.
+<p align="center">
+  <img src="docs/img/screenshots/dashboard_overview.png" alt="Live dashboard — compose prompts, see every classifier decision and latency in real time" width="900"/>
+</p>
 
-## How it works
+`Llama-Prompt-Guard-2-86M` (Meta, multilingual, threshold-tuned to **0.001**) inspects every prompt; a regex PII masker scrubs every response; `Tiny-Toxic-Detector` checks every output; and a per-conversation cumulative gate catches slow-burn social-engineering attacks that no single-prompt classifier would trigger. **Every artifact is committed**: pinned dataset SHAs, JSON eval reports, regenerable visualizations, end-to-end-reproducible threshold sweep — `git diff` shows you exactly what moved.
 
-```
-client ──▶ language router ──▶ input classifier ──▶ upstream LLM ──▶ PII mask ──▶ output classifier ──▶ client
-                                       │                                                  │
-                                       └──── refusal message ◀───────────────────────────┘
-```
+---
 
-Per request:
+## At a glance
 
-1. The **language router** classifies the prompt as English or Spanish using `fasttext` (when `lid.176.bin` is available) or `lingua`, falling back to heuristics or the English route if confidence is low. Unsupported languages take the English route.
-2. The routed **input classifier** scores the prompt. If it blocks, the API returns the configured refusal message with `decision: BLOCKED`.
-3. Otherwise the request is forwarded to the upstream LLM.
-4. A regex **PII masker** redacts emails, phone numbers, URLs, credit cards, API keys, private keys, and similar entities from the response in place. PII masking always runs.
-5. Every **output classifier** then scores the masked response. If any blocks, the refusal is returned with `decision: DROPPED`. If `LLM_FIREWALL_ENABLE_OUTPUT_CLASSIFIERS=false`, this stage is skipped (PII masking still applies).
-6. Otherwise the masked response is returned with `decision: ALLOWED`. Errors return `decision: ERROR`.
+| | |
+|---|---|
+| **Shipped input classifier** | `meta-llama/Llama-Prompt-Guard-2-86M` (multilingual, 102+ languages) |
+| **In-distribution F1** | **0.839** on a 1,455-prompt test slice held out from the training pool (vs. legacy SVM 0.712) |
+| **Multilingual stress test (DavidTKeane)** | **F1 0.824** — beats the previous English-only baseline by **+16.3 points** |
+| **Adversarial benchmark (JailbreakBench)** | **F1 0.723** — up from **0.000** with the prior model |
+| **Median classifier latency** | ~70 ms on Apple M1 MPS, sub-100 ms on CUDA |
+| **Tests** | **All passing** (unit + integration); deterministic eval pipeline |
 
-The firewall is fail-closed: only fully-approved requests and responses pass through.
-
-### Shipped classifiers
-
-| Stage | Label (in logs/dashboard) | Source |
-|---|---|---|
-| Input (all languages) | `protectai/deberta-v3-base-prompt-injection-v2` | Hugging Face `protectai/deberta-v3-base-prompt-injection-v2` |
-| Response masking | regex PII masker (always on) | [llm_firewall/filters/pii.py](llm_firewall/filters/pii.py) |
-| Output | `Tiny-Toxic-Detector` | Hugging Face `AssistantsLab/Tiny-Toxic-Detector` |
-
-To add, swap, or remove classifiers, edit [llm_firewall/classifiers/registry.py](llm_firewall/classifiers/registry.py). Each spec defines the dashboard label, a pickle path or Hugging Face id, and the preprocessing function applied before prediction.
-
-For the full story of how the input classifier was built and chosen — datasets, evaluation harness, model bake-off, and reproduction commands — see [docs/input_classifier/](docs/input_classifier/README.md).
+---
 
 ## Quickstart
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-make install              # pip install -e ".[dev]"
-cp .env.example .env      # then edit upstream URL + API key
-make run                  # uvicorn on http://localhost:8000
+make install                          # pip install -e ".[dev]"
+
+# Accept Meta's license for Llama-Prompt-Guard-2-86M (gated):
+#   https://huggingface.co/meta-llama/Llama-Prompt-Guard-2-86M
+huggingface-cli login
+
+cp .env.example .env                  # edit upstream URL + API key
+make run                              # uvicorn on http://localhost:8000
 ```
 
-`make install` pulls `torch`, `transformers`, and `huggingface-hub` for the output classifier and `fasttext-wheel` + `lingua-language-detector` for the language router. The first `make run` with output classifiers enabled downloads the Hugging Face model into the local cache.
+Open `http://localhost:8000/dashboard` to send prompts, watch decisions, and try the conversation gate.
 
-Open `http://localhost:8000/dashboard` to send prompts, watch decisions, and inspect runtime config.
+For prompts you'd rather not send to a real LLM, run the local dummy upstream:
 
-## Configuration
+```bash
+make dummy   # uvicorn on :9000 — fixed-response OpenAI-compatible upstream
+```
 
-The app reads from `.env` and from shell environment variables (shell wins on conflict).
+Then point `LLM_FIREWALL_UPSTREAM_CHAT_COMPLETIONS_URL=http://localhost:9000/v1/chat/completions`.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `LLM_FIREWALL_UPSTREAM_CHAT_COMPLETIONS_URL` | `https://api.openai.com/v1/chat/completions` | Upstream LLM endpoint |
-| `LLM_FIREWALL_UPSTREAM_API_KEY` | `""` | Server-side upstream key. If empty, the firewall forwards the caller's bearer token. |
-| `LLM_FIREWALL_DEFAULT_MODEL_ID` | `firewall-demo` | Default model name returned to clients |
-| `LLM_FIREWALL_ENABLE_OUTPUT_CLASSIFIERS` | `true` | Set to `false` to skip output validation (PII masking still runs) |
-| `LLM_FIREWALL_REFUSAL_MESSAGE` | `Sorry, I cannot answer this prompt` | Returned when input or output is blocked |
-| `LLM_FIREWALL_MODELS_DIR` | unset | Override the directory the input classifiers load `.pkl` artifacts from |
-| `DUMMY_LLM_API_KEY` | `""` | Bearer token enforced by `make dummy` (empty = open) |
-| `DUMMY_LLM_RESPONSE_TEXT` | `This is a dummy response.` | Canned response from the dummy upstream |
+---
 
-`.env.example` ships with Gemini's OpenAI-compatible endpoint as the default upstream and a commented recipe for pointing at the local dummy.
+## How it works
+
+```mermaid
+flowchart LR
+    C[Client] -->|prompt| LR[Language Router]
+    LR --> IC[Input Classifier<br/>Llama-Prompt-Guard-2-86M]
+    IC -->|allowed + cumulative ok| LLM[Upstream LLM]
+    IC -.->|blocked or<br/>conversation gated| Refuse[(Refusal)]
+    LLM --> PII[PII Masker<br/>regex]
+    PII --> OC[Output Classifier<br/>Tiny-Toxic-Detector]
+    OC -->|allowed| C2[Client]
+    OC -.->|toxic| Refuse2[(Refusal)]
+    IC -.-> Conv[(Conversation Cumulative<br/>Score Tracker)]
+    Conv -.-> IC
+    style IC fill:#0f9d58,stroke:#34a853,color:#fff
+    style OC fill:#4285f4,stroke:#4285f4,color:#fff
+    style PII fill:#fbbc04,stroke:#fbbc04,color:#202124
+    style Conv fill:#ea4335,stroke:#ea4335,color:#fff
+```
+
+Per request:
+
+1. **Language router** classifies the prompt language (fasttext / lingua / heuristic).
+2. **Input classifier** scores `P(injection)`. If the per-prompt score crosses the threshold, the request is refused immediately. Either way, the score is added to the conversation's running cumulative.
+3. **Conversation gate**: if the cumulative across this conversation crosses the configured threshold, every further prompt in that conversation is refused — even benign ones — until the caller starts a new conversation. Catches multi-step social engineering.
+4. **Upstream LLM** is called only if both gates pass.
+5. **PII masker** redacts emails, phones, URLs, credit cards, API keys, etc. from the response in place — always runs.
+6. **Output classifier** checks the masked response. If anything blocks, the refusal is returned.
+
+Fail-closed: only fully-approved prompts and responses pass through.
+
+---
+
+## The input classifier
+
+Zooming into the green box from the pipeline above. This is the component doing most of the security work — every approved prompt was scored by exactly this path before reaching your model.
+
+```mermaid
+flowchart TB
+    P[Raw prompt] --> N[Whitespace normalize<br/>+ Llama tokenizer · no truncation]
+    N --> SHORT{≤ 512 tokens ?}
+    SHORT -->|yes| M[Llama-Prompt-Guard-2-86M<br/>86M params · BERT-style<br/>meta-llama/Llama-Prompt-Guard-2-86M]
+    SHORT -->|no| W[Sliding window:<br/>512-token chunks · 64-token overlap<br/>score every chunk]
+    W --> M
+    M --> S[softmax → P injection<br/>max across chunks if windowed]
+    S --> GP{P ≥ 0.001 ?<br/>per-prompt threshold<br/>tuned on val.parquet}
+    GP -->|yes| BL[BLOCKED<br/>refusal returned]
+    GP -->|no| UP[upstream LLM]
+    S -.->|add to running sum| CT[Conversation cumulative<br/>Σ P across turns]
+    CT --> GC{Σ ≥ 1.5 ?<br/>conversation gate}
+    GC -->|yes| LK[Conversation LOCKED<br/>future turns refused<br/>until + New conversation]
+    GC -->|no| AC[Conversation active]
+    style M fill:#0f9d58,stroke:#34a853,color:#fff
+    style S fill:#0f9d58,stroke:#34a853,color:#fff
+    style BL fill:#ea4335,stroke:#ea4335,color:#fff
+    style LK fill:#ea4335,stroke:#ea4335,color:#fff
+    style UP fill:#4285f4,stroke:#4285f4,color:#fff
+    style AC fill:#0f9d58,stroke:#34a853,color:#fff
+    style CT fill:#fbbc04,stroke:#fbbc04,color:#202124
+    style W fill:#fbbc04,stroke:#fbbc04,color:#202124
+    style GP fill:#5f6368,stroke:#5f6368,color:#fff
+    style GC fill:#5f6368,stroke:#5f6368,color:#fff
+    style SHORT fill:#5f6368,stroke:#5f6368,color:#fff
+```
+
+Three things in this diagram are non-obvious and worth calling out:
+
+1. **Long prompts get sliding-window chunking, not truncation.** Llama-Prompt-Guard-2-86M has a 512-token context. A naive implementation truncates anything longer — letting an attacker hide an injection payload behind a long benign preamble. Instead we tokenize without truncation; if the prompt exceeds 512 tokens we slide a 512-token window with 64-token overlap, score every chunk, and take **max** P(injection). A payload anywhere in the prompt is still caught. The operator gets a log line stating window count + max score for forensics. Implementation: [`huggingface.py`](llm_firewall/classifiers/huggingface.py).
+2. **Threshold = 0.001, not the default 0.5.** Llama-Prompt-Guard-2's score distribution is **peaky** — most injection probability mass sits below 0.01 even for true positives. A 9-point threshold sweep on `val.parquet` placed F1-optimal at **0.001**, which we baked into [`registry.py`](llm_firewall/classifiers/registry.py). This single calibration moved DavidTKeane F1 from 0.485 → **0.824** and JailbreakBench from 0.448 → **0.723** without retraining. See [Performance](#performance) for the sweep curve.
+3. **The score feeds two independent gates.** The same `P(injection)` is consumed by (a) the per-prompt check, which decides this turn, and (b) the conversation cumulative, which decides whether the conversation continues. A subtle multi-turn jailbreak can pass (a) on every individual turn but still trip (b) when the cumulative crosses **1.5**. See [Conversation-aware blocking](#conversation-aware-blocking).
+
+Implementation: spec lives in [`registry.py`](llm_firewall/classifiers/registry.py), inference + chunking in [`huggingface.py`](llm_firewall/classifiers/huggingface.py), and the dual-gate orchestration in [`_processing.py`](llm_firewall/api/_processing.py).
+
+> **Note on the language router:** the system pipeline above shows a Language Router stage before the input classifier. Today it's largely vestigial — both `en` and `es` route to the same multilingual Llama-Prompt-Guard-2 spec, so the dispatch is effectively an identity function. It earns its place by (a) tagging every decision log with the detected language for telemetry/debugging and (b) leaving the plug-in point wired for any future language-specific specialist (e.g. a German-focused model). The previous SVM-era code actually had distinct English vs. Spanish models and the routing did real work; we left the wiring in place after the swap to keep that option open.
+
+---
+
+## Conversation-aware blocking
+
+A per-prompt classifier catches obvious attacks. It misses **slow-burn jailbreaks** — five borderline-suspicious prompts in a row, each individually below threshold, that together steer the model into compromising itself.
+
+Our fix: a per-conversation **cumulative score gate**. Every prompt's `P(injection)` is summed across the conversation. When the total crosses `LLM_FIREWALL_CONVERSATION_CUMULATIVE_THRESHOLD` (default `1.5`), every subsequent prompt — even benign ones — is refused until the caller starts a new conversation.
+
+<p align="center">
+  <img src="docs/img/screenshots/conversation_panel.png" alt="Conversation panel during a benign exchange" width="46%"/>
+  <img src="docs/img/screenshots/conversation_blocked.png" alt="Conversation panel after the cumulative gate fires" width="46%"/>
+</p>
+
+*Left: two benign turns, cumulative bar at 0%. Right: three additional adversarial prompts push the cumulative to 2.4417 / 1.50 — the gate fires, the input is locked, and the only escape is the **+ New conversation** button.*
+
+The feature is exposed via the standard chat-completions endpoint:
+
+```python
+response = client.chat.completions.create(
+    model="firewall-demo",
+    messages=[{"role": "user", "content": "..."}],
+    extra_body={"conversation_id": "conv_abc123"},  # optional; auto-generated if absent
+)
+print(response.conversation)  # {"id": ..., "cumulative_score": 0.42, "blocked": False, ...}
+```
+
+REST endpoints for explicit conversation lifecycle:
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /v1/conversations` | Start a new conversation, returns the id |
+| `GET /v1/conversations` | List recent conversations (summaries) |
+| `GET /v1/conversations/{id}` | Full state including per-turn history |
+| `DELETE /v1/conversations/{id}` | Reset (the dashboard's **+ New conversation** button) |
+
+State lives in process memory, capped at `LLM_FIREWALL_CONVERSATION_MAX_TRACKED` (default `1000`) with LRU eviction. Implementation: [`llm_firewall/api/conversations.py`](llm_firewall/api/conversations.py).
+
+---
+
+## Live dashboard
+
+The dashboard at `/dashboard` is a single-page React-free UI showing prompt submission, conversation mode, runtime config, and a live decision feed. The hero image at the top of this README is one half of it; the other half is the decision log:
+
+<p align="center">
+  <img src="docs/img/screenshots/decision_log.png" alt="Decision log — every request with per-classifier scores and latency" width="900"/>
+</p>
+
+Each row carries: timestamp, decision, prompt, response, **per-classifier scores and latencies** (keyed `input:<name>` and `output:<name>`), conversation id, and the routing detail. The `Avg Classifier Latency` stat counts only the firewall's own work — not the upstream LLM round-trip — so you see how fast the screening is, not how slow your model provider is.
+
+The dashboard is push-driven via Server-Sent Events (`/api/stream`) — no polling, no idle traffic, surgical row prepends. Read-only JSON endpoints power everything:
+
+| Endpoint | Returns |
+|---|---|
+| `GET /api/stream` | SSE feed: `snapshot` then `decision` events with authoritative aggregate stats |
+| `GET /api/logs?limit=N` | Most recent N decision log entries (1 ≤ N ≤ 500) |
+| `GET /api/stats` | Decision counts + average classifier latency |
+| `GET /api/config` | Runtime config (models, thresholds, refusal message) |
+| `GET /health` | `{"status": "healthy", "service": "promptshield"}` |
+
+---
+
+## Performance
+
+### Model bake-off — F1 across in-distribution + two held-out sets
+
+<p align="center">
+  <img src="docs/img/model_comparison_f1.png" alt="F1 across SVM baseline, Spanish SVM, protectai/deberta, and Llama-Prompt-Guard-2 (shipped)" width="900"/>
+</p>
+
+The shipped model (rightmost bar in each group) is the only candidate competitive on every set. The SVM collapses out-of-distribution; the English-only `protectai/deberta-v3-base-prompt-injection-v2` scores zero on JailbreakBench; the multilingual `Llama-Prompt-Guard-2-86M` only beats both **after** we tune its threshold.
+
+### Threshold tuning — calibrating Meta's classifier for our prompt mix
+
+<p align="center">
+  <img src="docs/img/threshold_sweep.png" alt="Threshold sweep showing F1 peaks at 0.001 for our combined dataset" width="900"/>
+</p>
+
+9-point sweep on `val.parquet`. F1 peaks at **0.001**, far from the canonical 0.5 — a consequence of the model's peaky score distribution discussed in [The input classifier](#the-input-classifier).
+
+### Per-source F1 — coverage across every training source
+
+<p align="center">
+  <img src="docs/img/per_source_performance.png" alt="Per-source F1 — shipped model wins or ties on every realistic source" width="900"/>
+</p>
+
+Shipped model wins or ties on every source except `JailbreakHub` (where it trades precision for recall — recall=1.000, precision=0.371 — to catch every adversarial pattern in that in-the-wild scrape).
+
+### Multilingual blocking — same model handles every language
+
+<p align="center">
+  <img src="docs/img/multilingual_blocking.png" alt="Per-prompt P(injection) on the DavidTKeane multilingual benchmark, with the 0.001 decision threshold drawn in" width="900"/>
+</p>
+
+Every dot is one real DavidTKeane prompt scored by the shipped classifier. Benign English (green) clusters two orders of magnitude *below* the threshold; English injections (red) mostly above with a visible false-negative tail — the 0.807 English F1 made visible. Non-English buckets are tiny (`n=…` annotated) so don't read this as proof on its own — the **0.824** multilingual F1 in the bake-off above is the real evidence; the chart shows what the per-prompt scores behind that number look like.
+
+<p align="center">
+  <img src="docs/img/multilingual_examples.png" alt="Real DavidTKeane non-English prompts with the live P(injection) score and BLOCK/MISS verdict" width="900"/>
+</p>
+
+A handful of real non-English prompts with the actual scores returned, including a deliberate French false negative (grey) so the chart isn't only a victory lap. Both figures are regenerated by [`generate_visualizations.py`](scripts/input_classifier/generate_visualizations.py) from the per-prompt parquet [`evaluate.py`](scripts/input_classifier/evaluate.py) writes alongside its JSON report — no hard-coded constants in the chart code.
+
+---
+
+## Datasets
+
+We combined **eight permissively-licensed jailbreak / prompt-injection datasets** with a multilingual benign baseline, deduplicated aggressively, and class-balanced to ~60% injection / 40% benign. Every step is reproducible.
+
+<p align="center">
+  <img src="docs/img/dataset_composition.png" alt="Donut chart of training-pool composition" width="640"/>
+</p>
+
+### Source manifest (verified from each dataset card, pinned to commit SHAs)
+
+| Dataset | Rows kept | Class balance | License | Why |
+|---|---|---|---|---|
+| [`neuralchemy/Prompt-injection-dataset`](https://huggingface.co/datasets/neuralchemy/Prompt-injection-dataset) | 6,274 | 60/40 mal/benign | permissive | Already-balanced primary set with rich `category` + `severity` metadata |
+| [`walledai/JailbreakHub`](https://huggingface.co/datasets/walledai/JailbreakHub) | 15,140 | 9/91 jb/benign | MIT | Largest in-the-wild scrape — Reddit, Discord, FlowGPT, JailbreakChat. Captures language patterns synthetic data can't fake. |
+| [`xTRam1/safe-guard-prompt-injection`](https://huggingface.co/datasets/xTRam1/safe-guard-prompt-injection) | 10,296 | 30/70 | unspecified ⚠ | Synthetic, broad attack-category coverage |
+| [`jackhhao/jailbreak-classification`](https://huggingface.co/datasets/jackhhao/jailbreak-classification) | 1,306 | ~40/60 | Apache 2.0 | Sourced from the verazuo/jailbreak_llms research repo |
+| [`Lakera/gandalf_ignore_instructions`](https://huggingface.co/datasets/Lakera/gandalf_ignore_instructions) | 1,000 | 100% injection | MIT | Real attempts from the Gandalf game — high-signal adversarial prompts |
+| [`deepset/prompt-injections`](https://huggingface.co/datasets/deepset/prompt-injections) | 662 | imbalanced | Apache 2.0 | Curated, German + English |
+| [`rubend18/ChatGPT-Jailbreak-Prompts`](https://huggingface.co/datasets/rubend18/ChatGPT-Jailbreak-Prompts) | 79 | 100% jailbreak | permissive | DAN-style canonical persona-jailbreaks |
+| [`OpenAssistant/oasst1`](https://huggingface.co/datasets/OpenAssistant/oasst1) (filtered) | 9,846 (subsampled) | 100% benign | Apache 2.0 | Multilingual benign baseline — 24-language chat prompts |
+
+**Dedup + balance:** 44,603 raw rows → 41,016 after exact + near-duplicate hashing; benign pool subsampled stratified by `(source, lang)` to land at the 60/40 ratio; 80/10/10 stratified split by `(source, label)` so every source appears in train, val, and test. Final committed train set: **11,646 rows across 21 languages** (10,735 English + 911 non-English).
+
+### Language coverage
+
+<p align="center">
+  <img src="docs/img/language_coverage.png" alt="Train set language histogram — non-English breakdown" width="900"/>
+</p>
+
+### Held-out evaluation (never used for training)
+
+- **DavidTKeane** — 112 curated test cases across 8 languages and 11 attack categories. Multilingual stress test.
+- **JailbreakBench/JBB-Behaviors** — 200-row standardized academic benchmark distilled from AdvBench, HarmBench, and TDC.
+
+Full dataset documentation in [`docs/input_classifier/datasets.md`](docs/input_classifier/datasets.md). Build script: [`scripts/input_classifier/build_dataset.py`](scripts/input_classifier/build_dataset.py). Resolved-SHA manifest: [`data/input_classifier/datasets/manifest.json`](data/input_classifier/datasets/manifest.json).
+
+---
+
+## Testing methodology
+
+We don't trust a single F1 number. Every committed report contains three tables:
+
+- **In-distribution test set** (10% slice of the combined training pool) → did the classifier learn the patterns you trained on?
+- **DavidTKeane held-out** (multilingual, 8 languages) → does it generalize off-distribution and across languages?
+- **JailbreakBench held-out** (academic benchmark) → does it generalize to attack styles published *after* most of the training data was collected?
+
+Per table we report **precision, recall, F1, ROC-AUC, PR-AUC, confusion matrix, per-source breakdown, per-language breakdown, mean and p95 latency** — all in one JSON, reproducible from one command:
+
+```bash
+python scripts/input_classifier/evaluate.py --classifier prompt_guard_2
+# → data/input_classifier/eval/prompt_guard_2.json (overwrites prior; diff shows drift)
+# → data/input_classifier/eval/prompt_guard_2_scores.parquet (per-prompt scores for visualizations)
+```
+
+The decision gate that promoted Llama-Prompt-Guard-2 over the previous English-only model required: F1 ≥ 0.85 in-distribution (achieved 0.839 — a deliberate trade for big multilingual gains), no regression vs the prior Spanish baseline on Spanish-tagged DavidTKeane prompts, and ≥ +10 F1 improvement on at least 2 of the 3 large training sources. Full bake-off in [`docs/input_classifier/models.md`](docs/input_classifier/models.md); harness at [`scripts/input_classifier/evaluate.py`](scripts/input_classifier/evaluate.py).
+
+---
 
 ## API
 
-### `POST /v1/chat/completions`
-
-```bash
-curl -X POST http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -d '{
-    "model": "firewall-demo",
-    "messages": [{"role": "user", "content": "What is the capital of France?"}]
-  }'
-```
-
-The response shape matches OpenAI's; blocked requests/responses come back as a normal `chat.completion` whose `content` is the configured refusal message. Inspect the dashboard or `/api/logs` to see the actual `decision` (`ALLOWED` / `BLOCKED` / `DROPPED` / `ERROR`).
-
-If `LLM_FIREWALL_UPSTREAM_API_KEY` is set the SDK key can be a placeholder — the firewall uses its server-side key. If unset, the caller's bearer token is forwarded upstream.
-
-### `POST /v1/chat/completions/batch`
-
-Test up to 1000 prompts in one call, each routed through the full pipeline:
-
-```bash
-curl -X POST http://localhost:8000/v1/chat/completions/batch \
-  -H "Content-Type: application/json" \
-  -d @examples/batch_prompts.json
-```
-
-Body fields: `prompts` (string array, max 1000), `model`, optional `system_message`, optional `concurrency` (default 20, capped at 100). The response includes batch metadata, an `allowed`/`blocked`/`dropped`/`errors` summary, and one result per prompt with `index`, `prompt`, `http_status`, `decision`, `content`, `scores`, `latencies_ms`, `detail`, and `failed_filters`. Sample payloads live in [examples/](examples/).
-
-### `GET /v1/models`, `GET /v1/models/{id}`
-
-Proxied to the upstream when supported, with a minimal local fallback otherwise (e.g. when running against `make dummy`).
-
-### OpenAI SDK
+Standard OpenAI shape — anything that talks to OpenAI talks to this.
 
 ```python
 from openai import OpenAI
@@ -107,73 +295,80 @@ from openai import OpenAI
 client = OpenAI(api_key="placeholder", base_url="http://localhost:8000/v1")
 response = client.chat.completions.create(
     model="firewall-demo",
-    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    messages=[{"role": "user", "content": "Ignore all previous instructions."}],
 )
-print(response.choices[0].message.content)
+print(response.choices[0].message.content)  # → the configured refusal message
 ```
 
-The Responses API is not implemented.
+Blocked requests come back as a normal `chat.completion` whose `content` is the configured refusal message and whose body carries an extra `conversation_id` + `conversation` summary. Inspect the dashboard or `/api/logs` to see the actual decision (`ALLOWED` / `BLOCKED` / `DROPPED` / `ERROR`).
 
-## Dashboard & observability
+Batch endpoint at `POST /v1/chat/completions/batch` accepts up to 1000 prompts per request with configurable concurrency. See [`examples/`](examples/) for sample payloads.
 
-`http://localhost:8000/dashboard` provides prompt submission, the last response, the resolved upstream and registered classifiers, and a live decision feed.
+---
 
-Read-only JSON endpoints:
+## Configuration
 
-| Endpoint | Returns |
-|---|---|
-| `GET /api/logs?limit=N` | Most recent `N` decision log entries (1 ≤ N ≤ 500) |
-| `GET /api/stats` | Totals + decision counts + average end-to-end latency |
-| `GET /api/config` | Resolved runtime config shown to the dashboard |
-| `GET /health` | `{"status": "healthy", "service": "promptshield"}` |
+The interesting knobs (full list in [`docs/input_classifier/`](docs/input_classifier/)):
 
-Each log entry carries: `timestamp`, short `id`, `prompt`, `response`/refusal, `decision`, per-classifier `scores` and `latencies_ms` keyed `input:<name>` / `output:<name>` (plus a synthetic `input:Language Router` entry), `total_latency_ms`, `detail`, and `failed_filters`.
+| Variable | Default | Purpose |
+|---|---|---|
+| `LLM_FIREWALL_UPSTREAM_CHAT_COMPLETIONS_URL` | OpenAI | Where the firewall forwards approved prompts |
+| `LLM_FIREWALL_CONVERSATION_CUMULATIVE_THRESHOLD` | `1.5` | Sum-of-scores threshold that gates a conversation |
+| `LLM_FIREWALL_CONVERSATION_MAX_TRACKED` | `1000` | Soft cap on tracked conversations (LRU eviction) |
+| `LLM_FIREWALL_ENABLE_OUTPUT_CLASSIFIERS` | `true` | Skip output validation if you only want input filtering |
+| `LLM_FIREWALL_REFUSAL_MESSAGE` | `Sorry, I cannot answer this prompt` | Returned on any block |
 
-The log lives in process memory — restarting the server clears it — and is capped at the most recent 500 entries. Batch requests add one entry per prompt.
+All settings load from `.env` or the shell environment. See [`.env.example`](.env.example) for the full template.
 
-## Local dummy upstream
-
-[llm_firewall/api/dummy_llm.py](llm_firewall/api/dummy_llm.py) is a fixed-response, OpenAI-compatible upstream useful for end-to-end testing without spending API credits.
-
-```bash
-make dummy   # uvicorn on :9000, exposes POST /v1/chat/completions and GET /health
-```
-
-Then point the firewall at it (see the commented block in `.env.example`):
-
-```dotenv
-LLM_FIREWALL_UPSTREAM_CHAT_COMPLETIONS_URL=http://localhost:9000/v1/chat/completions
-LLM_FIREWALL_UPSTREAM_API_KEY=
-LLM_FIREWALL_DEFAULT_MODEL_ID=dummy-llm
-```
-
-The default `DUMMY_LLM_RESPONSE_TEXT` passes the shipped output classifier. To require auth between firewall and dummy, set the same shared secret in both `LLM_FIREWALL_UPSTREAM_API_KEY` and `DUMMY_LLM_API_KEY`.
+---
 
 ## Repository layout
 
 ```
 llm_firewall/
-  api/           FastAPI app, routes, dashboard, dummy upstream, shared processing
+  api/           FastAPI app, routes, dashboard, conversations, dummy upstream
   core/          Settings + outbound HTTP proxy
-  classifiers/   Registry, ensemble, language router, pickle/HF backends
+  classifiers/   Registry, ensemble, language router, HF + pickle backends
   filters/       FilterResult primitive + PII / toxicity filters
-  validators/    InputValidator / OutputValidator wrappers
-data/models/     Pre-trained input classifier artifacts (.pkl)
-dashboard/       Single-page monitoring UI
-examples/        Sample batch payloads
-scripts/         Standalone simulation script
-tests/           unit/ + integration/
+  validators/    Input / Output validator wrappers
+data/
+  input_classifier/
+    datasets/    Committed train/val/test parquets + sources.json + manifest.json
+    eval/        Committed JSON reports + per-prompt scores parquet
+docs/
+  input_classifier/   Datasets, evaluation, models, reproducibility
+  img/                Visualizations + dashboard screenshots
+scripts/
+  input_classifier/   build_dataset.py, evaluate.py, generate_visualizations.py
+  capture_dashboard_screenshots.py
+dashboard/index.html  Single-page monitoring UI (chat mode + decision log)
+tests/                unit/ + integration/ — fully offline
 ```
+
+---
 
 ## Development
 
 ```bash
 make test        # pytest, unit + integration
 make simulate    # scripts/simulate.py — standalone validation run
-make clean       # remove build, cache, .venv
 ```
 
-Tests use lightweight fake pickle models, mock the upstream LLM with `respx`, and never make real network calls. Batch processing is exercised end-to-end against the dummy upstream.
+Tests use lightweight fake pickle models, mock the upstream LLM with `respx`, never make real network calls, and cover the conversation gate end-to-end.
+
+To regenerate the committed visualizations after re-running an eval:
+
+```bash
+.venv/bin/python scripts/input_classifier/generate_visualizations.py
+```
+
+To regenerate the committed dashboard screenshots (requires Playwright + a running firewall):
+
+```bash
+.venv/bin/python scripts/capture_dashboard_screenshots.py
+```
+
+---
 
 ## Team
 
