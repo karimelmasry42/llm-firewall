@@ -10,10 +10,17 @@ and surfaces a single block decision when the windowed total crosses
 
 The window matters: with all-time sum, every conversation eventually trips
 the gate regardless of intent and the threshold has no defensible meaning.
-With a fixed window, "the last 30 turns of suspicion" is a real signal that
+With a fixed window, "the last N turns of suspicion" is a real signal that
 naturally bounds itself for benign chatter and concentrates on recent
 adversarial pattern. Once tripped, a conversation stays locked — attackers
 don't get to dilute their way out by appending benign turns.
+
+Concurrency: each `Conversation` carries an `asyncio.Lock` that the
+request handler MUST hold across the predict→record pair. Without the
+lock, two concurrent requests sharing a conversation_id can both pass the
+gate before either appends its turn — the TOCTOU window is the entire
+upstream LLM call. Independent conversations still process in parallel
+(the lock is per-conversation, not global).
 
 State lives in `app.state.conversations`. The store is in-memory and capped
 at `Settings.conversation_max_tracked` entries — oldest-touched
@@ -21,6 +28,7 @@ conversations are evicted on overflow. Restarting the server clears it.
 """
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from collections import OrderedDict
@@ -36,6 +44,8 @@ class ConversationTurn:
 
     timestamp: float
     prompt: str
+    prompt_truncated: bool  # True if the original was longer than the in-memory cap
+    prompt_original_length: int
     score: float
     decision: str  # ALLOWED / BLOCKED / DROPPED / ERROR
     cumulative_score_after: float
@@ -43,7 +53,14 @@ class ConversationTurn:
 
 @dataclass
 class Conversation:
-    """In-memory state for one conversation_id."""
+    """In-memory state for one conversation_id.
+
+    `lock` serializes the predict→record critical section for one
+    conversation so two concurrent requests sharing a `conversation_id`
+    can't both pass the cumulative gate before either appends its turn.
+    The lock is per-conversation, not global — independent conversations
+    still process in parallel.
+    """
 
     id: str
     created_at: float = field(default_factory=time.time)
@@ -52,6 +69,7 @@ class Conversation:
     blocked: bool = False
     blocked_reason: str | None = None
     turns: list[ConversationTurn] = field(default_factory=list)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def to_summary(self) -> dict[str, Any]:
         """Lightweight JSON-friendly view (no per-turn prompt text)."""
@@ -73,6 +91,8 @@ class Conversation:
                 {
                     "timestamp": t.timestamp,
                     "prompt": t.prompt,
+                    "prompt_truncated": t.prompt_truncated,
+                    "prompt_original_length": t.prompt_original_length,
                     "score": round(t.score, 6),
                     "decision": t.decision,
                     "cumulative_score_after": round(t.cumulative_score_after, 6),
@@ -96,7 +116,11 @@ def _max_tracked(app: FastAPI) -> int:
 
 
 def _evict_if_full(store: "OrderedDict[str, Conversation]", cap: int) -> None:
-    while len(store) > cap:
+    # `get_or_create` is the only insertion path and it inserts at most one
+    # entry per call, so this can only ever need a single eviction. (Kept
+    # as `if`, not `while`, so the invariant — "at most one over cap" — is
+    # explicit. If batch insertion is ever introduced, switch back to `while`.)
+    if len(store) > cap:
         store.popitem(last=False)
 
 
@@ -145,6 +169,9 @@ def _window_size(app: FastAPI) -> int:
     return int(getattr(app.state.settings, "conversation_window_size", 30))
 
 
+PROMPT_STORAGE_LIMIT = 500
+
+
 def record_turn(
     app: FastAPI,
     conversation: Conversation,
@@ -160,12 +187,23 @@ def record_turn(
     the all-time sum. The "blocked" flag is sticky — once tripped, it stays
     set even if the windowed sum later drops back below the threshold,
     so attackers cannot recover the conversation by appending benign turns.
+
+    Caller must be holding `conversation.lock` to make the predict→record
+    pair atomic against concurrent requests for the same conversation_id.
     """
+    original_length = len(prompt)
+    truncated = original_length > PROMPT_STORAGE_LIMIT
+    # Truncate long prompts to keep per-conversation memory bounded; the
+    # firewall log already keeps a fuller copy under decision_log. Mark
+    # the truncation so dashboards can render an indicator instead of
+    # silently showing a cut-off payload.
+    stored = prompt[:PROMPT_STORAGE_LIMIT] + "…" if truncated else prompt
+
     new_turn = ConversationTurn(
         timestamp=time.time(),
-        # Truncate long prompts to keep memory bounded; the firewall
-        # log already keeps a fuller copy under decision_log.
-        prompt=prompt[:500],
+        prompt=stored,
+        prompt_truncated=truncated,
+        prompt_original_length=original_length,
         score=float(score),
         decision=decision,
         cumulative_score_after=0.0,  # back-filled below once we know the window sum

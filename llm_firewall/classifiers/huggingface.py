@@ -365,11 +365,17 @@ class HFSequenceClassifier:
             f"id2label={id2label!r}"
         )
 
-    # Overlap (in tokens) between adjacent windows when a long prompt is
-    # chunked. Set so an injection payload spanning a window boundary still
-    # appears wholly in at least one window. 64 tokens ≈ a sentence or two
-    # — enough for typical "ignore previous instructions" payloads.
-    _CHUNK_OVERLAP_TOKENS = 64
+    # Default overlap (in tokens) between adjacent windows when a long
+    # prompt is chunked. Sized so an injection payload spanning a window
+    # boundary still appears wholly in at least one window — 64 tokens ≈
+    # a sentence or two, enough for typical "ignore previous instructions"
+    # payloads. Clamped to `max_length // 2` per call so an operator who
+    # configures a small max_length doesn't accidentally produce
+    # stride=1 and a per-prompt DoS surface.
+    _DEFAULT_CHUNK_OVERLAP_TOKENS = 64
+
+    def _chunk_overlap_tokens(self) -> int:
+        return min(self._DEFAULT_CHUNK_OVERLAP_TOKENS, max(0, self._max_length // 2))
 
     def evaluate(self, text: str) -> FilterResult:
         started_at = perf_counter()
@@ -384,7 +390,10 @@ class HFSequenceClassifier:
         full_len = int(full_ids.shape[-1])
 
         # Fast path: short-enough prompts go through a single forward pass,
-        # behaviour identical to the pre-chunking implementation.
+        # behaviour identical to the pre-chunking implementation. `full_len`
+        # already includes any special tokens the tokenizer emits (e.g.
+        # [CLS] + [SEP] for BERT-family models), so the comparison against
+        # `_max_length` is exact — no special-token margin needed.
         if full_len <= self._max_length:
             blocking_score = self._score_window(full_ids, full_mask)
         else:
@@ -393,7 +402,8 @@ class HFSequenceClassifier:
             # the prompt — head, tail, or middle — is caught instead of
             # being hidden behind a benign preamble that fills the model's
             # context window.
-            stride = max(1, self._max_length - self._CHUNK_OVERLAP_TOKENS)
+            overlap = self._chunk_overlap_tokens()
+            stride = max(1, self._max_length - overlap)
             scores: list[float] = []
             offset = 0
             while offset < full_len:
@@ -412,7 +422,7 @@ class HFSequenceClassifier:
                 full_len,
                 self._max_length,
                 len(scores),
-                self._CHUNK_OVERLAP_TOKENS,
+                overlap,
                 blocking_score,
             )
 

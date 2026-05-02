@@ -12,8 +12,8 @@ from llm_firewall.api.events import DecisionBroadcaster, get_broadcaster
 def test_broadcaster_publishes_to_all_subscribers():
     async def run():
         bc = DecisionBroadcaster()
-        a = await bc.subscribe()
-        b = await bc.subscribe()
+        a = bc.subscribe()
+        b = bc.subscribe()
         bc.publish({"hello": "world"})
         assert await asyncio.wait_for(a.get(), 0.5) == {"hello": "world"}
         assert await asyncio.wait_for(b.get(), 0.5) == {"hello": "world"}
@@ -25,7 +25,7 @@ def test_broadcaster_publishes_to_all_subscribers():
 def test_broadcaster_unsubscribe_stops_delivery():
     async def run():
         bc = DecisionBroadcaster()
-        a = await bc.subscribe()
+        a = bc.subscribe()
         bc.unsubscribe(a)
         bc.publish({"hello": "world"})
         # Either nothing is delivered (correct) or the queue stays empty.
@@ -39,7 +39,7 @@ def test_broadcaster_unsubscribe_stops_delivery():
 def test_broadcaster_drops_for_full_subscriber():
     async def run():
         bc = DecisionBroadcaster()
-        slow = await bc.subscribe()
+        slow = bc.subscribe()
         # Saturate the queue (depth is 32).
         for i in range(32):
             bc.publish({"i": i})
@@ -66,7 +66,7 @@ def test_log_decision_publishes_to_subscribers():
 
         app = SimpleNamespace(state=SimpleNamespace(decision_log=[]))
         bc = get_broadcaster(app)
-        sub = await bc.subscribe()
+        sub = bc.subscribe()
 
         log_decision(app, {
             "type": "PASSED",
@@ -96,7 +96,7 @@ def test_decision_event_carries_authoritative_stats():
 
         app = SimpleNamespace(state=SimpleNamespace(decision_log=[]))
         bc = get_broadcaster(app)
-        sub = await bc.subscribe()
+        sub = bc.subscribe()
 
         for decision in ("ALLOWED", "BLOCKED", "DROPPED"):
             log_decision(app, {

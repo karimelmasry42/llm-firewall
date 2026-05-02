@@ -38,8 +38,13 @@ class DecisionBroadcaster:
     def subscriber_count(self) -> int:
         return len(self._subscribers)
 
-    async def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
-        """Return a fresh queue scoped to one subscriber."""
+    def subscribe(self) -> asyncio.Queue[dict[str, Any]]:
+        """Return a fresh queue scoped to one subscriber.
+
+        Synchronous because no I/O is involved — `asyncio.Queue` is just
+        instantiated and added to a set. Callers in async contexts can
+        just call `broadcaster.subscribe()` (no await).
+        """
         q: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=_QUEUE_MAX)
         self._subscribers.add(q)
         return q

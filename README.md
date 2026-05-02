@@ -312,6 +312,11 @@ The interesting knobs (full list in [`docs/input_classifier/`](docs/input_classi
 
 All settings load from `.env` or the shell environment. See [`.env.example`](.env.example) for the full template.
 
+### Breaking changes vs. v0.1
+
+- `create_app(input_classifier_specs_by_language=...)` removed; use the singular `input_classifier_specs=[...]`. The language router has been removed because the shipped multilingual classifier already handles every language uniformly.
+- `app.state.input_validators` (a `dict[str, InputValidator]` keyed by language) replaced by `app.state.input_validator` (singular). Anyone hooking into the FastAPI app state for monitoring needs to update.
+
 ---
 
 ## Repository layout

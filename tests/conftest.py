@@ -103,10 +103,15 @@ def firewall_settings():
         default_model_id="firewall-demo",
         enable_output_classifiers=True,
         refusal_message="Sorry, I cannot answer this prompt",
-        # Tests use lightweight fake pickle classifiers whose scores sit
-        # an order of magnitude higher than the production Llama model.
-        # Lift the cumulative threshold so single benign turns don't trip
-        # the conversation gate during basic round-trip assertions.
+        # Tests use lightweight keyword-matching pickle fakes (built by
+        # `make_model_bundle` in this conftest). They emit ~0.06 for any
+        # benign prompt — about 60× the per-prompt threshold of 0.001 the
+        # real Llama-Prompt-Guard-2 spec uses (see
+        # `llm_firewall/classifiers/registry.py`). At the production
+        # `conversation_cumulative_threshold=0.01`, a single benign turn
+        # would already trip the gate, so we lift the threshold here.
+        # Tests for the gate itself construct their own apps with
+        # explicit thresholds (see test_conversations.py).
         conversation_cumulative_threshold=1.5,
     )
 

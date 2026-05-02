@@ -92,6 +92,52 @@ def test_blocked_flag_is_sticky_after_window_recovery():
     assert conv.blocked_reason == blocked_reason
 
 
+def test_truncated_prompt_is_marked_in_full_view():
+    """`to_full()` must surface the truncation marker so dashboards don't
+    silently render a cut-off payload as if it were the whole prompt."""
+    app = _fake_app(threshold=10.0, window_size=30)
+    conv = conv_state.get_or_create(app, "trunc-test")
+    long_prompt = "X" * 1200
+    conv_state.record_turn(app, conv, prompt=long_prompt, score=0.0, decision="ALLOWED")
+
+    turn = conv.to_full()["turns"][0]
+    assert turn["prompt_truncated"] is True
+    assert turn["prompt_original_length"] == 1200
+    # Stored payload has the elision marker so a reader can tell it's not
+    # the original.
+    assert turn["prompt"].endswith("…")
+    assert len(turn["prompt"]) == conv_state.PROMPT_STORAGE_LIMIT + 1  # 500 + ellipsis
+
+
+def test_short_prompt_is_not_marked_as_truncated():
+    """Round-trip case: short prompts come out untouched and unmarked."""
+    app = _fake_app()
+    conv = conv_state.get_or_create(app, "short-test")
+    conv_state.record_turn(app, conv, prompt="hi there", score=0.0, decision="ALLOWED")
+    turn = conv.to_full()["turns"][0]
+    assert turn["prompt"] == "hi there"
+    assert turn["prompt_truncated"] is False
+    assert turn["prompt_original_length"] == 8
+
+
+def test_conversation_has_async_lock():
+    """The per-conversation lock is what serializes the predict→record
+    critical section; verify it's a real asyncio.Lock and is released
+    when the `async with` block exits cleanly."""
+    import asyncio
+
+    app = _fake_app()
+    conv = conv_state.get_or_create(app, "lock-test")
+    assert isinstance(conv.lock, asyncio.Lock)
+
+    async def acquire_release():
+        async with conv.lock:
+            assert conv.lock.locked()
+        assert not conv.lock.locked()
+
+    asyncio.run(acquire_release())
+
+
 def test_predict_windowed_cumulative_simulates_append():
     """The predictor returns the windowed sum as-if the new score were
     appended, without mutating any state."""

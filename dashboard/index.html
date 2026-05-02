@@ -827,10 +827,6 @@
             return `<span class="score-chip neutral">total: ${formatLatency(totalLatencyMs)}</span>`;
         }
 
-        function shouldDisplayClassifierChip(name) {
-            return name !== 'input:Language Router';
-        }
-
         function formatTimestamp(ts) {
             if (!ts) return '-';
             const d = new Date(ts);
@@ -861,7 +857,6 @@
             const scores = log.scores || {};
             const latencies = log.latencies_ms || {};
             const chips = Object.entries(scores)
-                .filter(([k]) => shouldDisplayClassifierChip(k))
                 .map(([k, v]) => getScoreChip(k, v, latencies[k]));
             const totalLatencyChip = getTotalLatencyChip(log.total_latency_ms);
             if (totalLatencyChip) chips.push(totalLatencyChip);

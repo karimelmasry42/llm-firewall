@@ -294,12 +294,8 @@ def test_hf_sequence_classifier_short_prompts_unchanged_by_chunking(
 def test_hf_sequence_classifier_chunk_count_matches_overlap_formula(
     patch_transformers
 ):
-    """A 24-token prompt with max_length=8 and overlap=64 (the default,
-    capped to 1) should produce ceil(24/8) = 3 windows when overlap >=
-    max_length forces stride=1; for the realistic max_length=8/overlap=64
-    case stride is clamped to 1 to make sure chunking still progresses
-    instead of looping forever. We test the shipped overlap-64 default
-    against a real-ish ratio."""
+    """1500 tokens at max=512, overlap=64 → stride=448 → windows starting
+    at 0, 448, 896, 1344 → 4 windows. Verifies the production shape."""
     from llm_firewall.classifiers.huggingface import HFSequenceClassifier
 
     spec = ClassifierSpec(
@@ -312,8 +308,6 @@ def test_hf_sequence_classifier_chunk_count_matches_overlap_formula(
     )
     clf = HFSequenceClassifier(spec)
 
-    # 1500 tokens at max=512, overlap=64 → stride=448 → windows starting at
-    # 0, 448, 896, 1344 → 4 windows.
     _FakeTokenizer.next_length = 1500
     try:
         # Spy on _score_window to count invocations.
@@ -335,6 +329,54 @@ def test_hf_sequence_classifier_chunk_count_matches_overlap_formula(
     for length in calls[:-1]:
         assert length == 512
     assert calls[-1] <= 512
+
+
+def test_hf_sequence_classifier_overlap_clamps_for_small_max_length(
+    patch_transformers
+):
+    """If an operator drops `max_length` below the hard-coded 64-token
+    overlap default, naive `stride = max_length - overlap` clamps to 1
+    and a long prompt becomes ~`full_len` forward passes — a per-prompt
+    DoS surface. The clamping fix bounds overlap at `max_length // 2`
+    so worst-case stride is `max_length - max_length//2 = ceil(max_length/2)`,
+    keeping the window count linear in `full_len / max_length`."""
+    from llm_firewall.classifiers.huggingface import HFSequenceClassifier
+
+    # max_length=8 with the default 64-token overlap pre-fix would have
+    # produced 23 windows for a 24-token input (stride=1). With the
+    # fix, overlap clamps to 4 → stride=4 → starts at 0, 4, 8, 12, 16
+    # → 5 windows.
+    spec = ClassifierSpec(
+        name="test_hf_small_max",
+        backend="huggingface_sequence",
+        model_id="dummy",
+        preprocess=normalize_whitespace,
+        max_length=8,
+        threshold=0.5,
+    )
+    clf = HFSequenceClassifier(spec)
+    assert clf._chunk_overlap_tokens() == 4  # clamped from default 64
+
+    _FakeTokenizer.next_length = 24
+    try:
+        calls = []
+        original = clf._score_window
+
+        def spy(input_ids, attention_mask):
+            calls.append(int(input_ids.shape[-1]))
+            return original(input_ids, attention_mask)
+
+        clf._score_window = spy  # type: ignore[method-assign]
+        clf.evaluate("any text")
+    finally:
+        _FakeTokenizer.next_length = None
+
+    # Far fewer windows than the pre-fix worst case (~24). With clamped
+    # overlap it should be a single-digit count.
+    assert len(calls) <= 6, (
+        f"window count exploded to {len(calls)} for 24 tokens at max_length=8 "
+        "— overlap clamping regression"
+    )
 
 
 def test_hf_sequence_classifier_resolves_label_before_device_move(

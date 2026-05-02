@@ -18,6 +18,7 @@ from llm_firewall.core.config import Settings
 from llm_firewall.core.proxy import forward_to_llm
 from llm_firewall.filters.pii import mask
 from llm_firewall.api import conversations as conv_state
+from llm_firewall.api._stats import compute_stats
 from llm_firewall.api.events import get_broadcaster
 from llm_firewall.validators.input import InputValidator
 from llm_firewall.validators.output import OutputValidator
@@ -116,8 +117,9 @@ def log_decision(app: FastAPI, entry: dict) -> None:
         app.state.decision_log.pop()
     # Pass authoritative aggregate stats with every event so SSE clients
     # don't have to maintain a running tally locally (which drifts once
-    # the bounded decision_log starts evicting old entries).
-    from llm_firewall.api.dashboard import compute_stats  # local to avoid cycle
+    # the bounded decision_log starts evicting old entries). `compute_stats`
+    # lives in `_stats.py` to avoid the import cycle that arose when
+    # `dashboard.py` (which imports from `_processing.py`) owned it.
     get_broadcaster(app).publish(
         {
             "type": "decision",
@@ -328,198 +330,81 @@ async def process_chat_completion(
                 _elapsed_ms(request_started_at),
             )
 
-    input_result = input_validator.validate(prompt)
-    input_scores = _prefixed_scores("input", input_result.scores_summary)
-    input_latencies = _prefixed_latencies("input", input_result.latencies_summary)
-
-    # Primary per-prompt score: max P(injection) across the input
-    # classifiers. This is what feeds the conversation-level cumulative gate.
-    primary_score = _primary_input_score(input_result)
-
-    if not input_result.passed:
-        blocked_by = [result.filter_name for result in input_result.failed_filters]
-        logger.warning(
-            "Blocked prompt with input classifiers: %s", ", ".join(blocked_by)
-        )
-        detail = f"Blocked by input classifiers: {', '.join(blocked_by)}"
-        refusal_response = build_openai_response(settings.refusal_message)
-        total_latency_ms = _elapsed_ms(request_started_at)
-        conv_state.record_turn(
-            app, conversation, prompt=prompt, score=primary_score, decision="BLOCKED"
-        )
-        _attach_conversation(refusal_response, conversation)
-        log_decision(
-            app,
-            {
-                "type": "INPUT_BLOCKED",
+    # CRITICAL SECTION: serialize the predict→record window per
+    # conversation. Concurrent requests sharing a `conversation_id` queue
+    # here so two parallel attackers can't both pass the cumulative gate
+    # before either appends its turn. The lock is per-conversation, not
+    # global — independent conversations still process in parallel.
+    async with conversation.lock:
+        # Re-check under the lock — another request for this same
+        # conversation may have just tripped the gate while we were
+        # waiting for the lock.
+        if conv_state.is_blocked_by_cumulative(conversation):
+            refusal_response = build_openai_response(settings.refusal_message)
+            refusal_response["conversation_id"] = conversation.id
+            refusal_response["conversation"] = conversation.to_summary()
+            detail = (
+                f"Conversation {conversation.id} previously blocked: "
+                f"{conversation.blocked_reason}"
+            )
+            log_decision(
+                app,
+                {
+                    "type": "CONVERSATION_BLOCKED",
+                    "prompt": prompt,
+                    "response": settings.refusal_message,
+                    "decision": "BLOCKED",
+                    "scores": {},
+                    "latencies_ms": {},
+                    "total_latency_ms": _elapsed_ms(request_started_at),
+                    "detail": detail,
+                    "conversation_id": conversation.id,
+                    "cumulative_score": conversation.cumulative_score,
+                },
+            )
+            return {
+                "status_code": 200,
+                "payload": refusal_response,
                 "prompt": prompt,
-                "response": settings.refusal_message,
                 "decision": "BLOCKED",
-                "scores": input_scores,
-                "latencies_ms": input_latencies,
-                "total_latency_ms": total_latency_ms,
-                "detail": detail,
-                "failed_filters": blocked_by,
-                "conversation_id": conversation.id,
-                "cumulative_score": conversation.cumulative_score,
-            },
-        )
-        return {
-            "status_code": 200,
-            "payload": refusal_response,
-            "prompt": prompt,
-            "decision": "BLOCKED",
-            "content": settings.refusal_message,
-            "scores": input_scores,
-            "latencies_ms": input_latencies,
-            "total_latency_ms": total_latency_ms,
-            "detail": detail,
-            "failed_filters": blocked_by,
-            "conversation_id": conversation.id,
-        }
-
-    # The per-prompt classifier passed, but adding this prompt's score
-    # might tip the conversation's *windowed* cumulative over threshold.
-    # `predict_windowed_cumulative` simulates the append (so we can refuse
-    # before mutating state); `record_turn` below applies the same math
-    # for real once we've decided the turn's outcome.
-    cum_threshold = float(settings.conversation_cumulative_threshold)
-    pending_cumulative = conv_state.predict_windowed_cumulative(
-        app, conversation, primary_score
-    )
-    if pending_cumulative >= cum_threshold:
-        detail = (
-            f"Blocked by conversation cumulative score "
-            f"({pending_cumulative:.4f} ≥ {cum_threshold:.4f}) over the "
-            f"last {min(len(conversation.turns) + 1, int(settings.conversation_window_size))} turn(s)"
-        )
-        logger.warning("Blocked prompt by conversation gate: %s", detail)
-        refusal_response = build_openai_response(settings.refusal_message)
-        total_latency_ms = _elapsed_ms(request_started_at)
-        conv_state.record_turn(
-            app, conversation, prompt=prompt, score=primary_score, decision="BLOCKED"
-        )
-        _attach_conversation(refusal_response, conversation)
-        log_decision(
-            app,
-            {
-                "type": "CONVERSATION_BLOCKED",
-                "prompt": prompt,
-                "response": settings.refusal_message,
-                "decision": "BLOCKED",
-                "scores": input_scores,
-                "latencies_ms": input_latencies,
-                "total_latency_ms": total_latency_ms,
+                "content": settings.refusal_message,
+                "scores": {},
+                "latencies_ms": {},
+                "total_latency_ms": _elapsed_ms(request_started_at),
                 "detail": detail,
                 "failed_filters": ["conversation_cumulative"],
                 "conversation_id": conversation.id,
-                "cumulative_score": conversation.cumulative_score,
-            },
-        )
-        return {
-            "status_code": 200,
-            "payload": refusal_response,
-            "prompt": prompt,
-            "decision": "BLOCKED",
-            "content": settings.refusal_message,
-            "scores": input_scores,
-            "latencies_ms": input_latencies,
-            "total_latency_ms": total_latency_ms,
-            "detail": detail,
-            "failed_filters": ["conversation_cumulative"],
-            "conversation_id": conversation.id,
-        }
+            }
 
-    scores = dict(input_scores)
-    latencies_ms = dict(input_latencies)
-    api_key = resolve_upstream_api_key(settings, auth_header)
-    try:
-        upstream_response = await forward_to_llm(
-            request_body=body,
-            llm_api_url=settings.upstream_chat_completions_url,
-            api_key=api_key,
-        )
-    except Exception as exc:
-        logger.error("Upstream LLM error: %s", exc)
-        detail = f"Upstream error: {exc}"
-        total_latency_ms = _elapsed_ms(request_started_at)
-        # Don't penalize the conversation for an upstream failure — record the
-        # turn with score=0 so cumulative isn't poisoned by infrastructure noise.
-        conv_state.record_turn(
-            app, conversation, prompt=prompt, score=0.0, decision="ERROR"
-        )
-        log_decision(
-            app,
-            {
-                "type": "UPSTREAM_ERROR",
-                "prompt": prompt,
-                "response": str(exc),
-                "decision": "ERROR",
-                "scores": scores,
-                "latencies_ms": latencies_ms,
-                "total_latency_ms": total_latency_ms,
-                "detail": detail,
-                "conversation_id": conversation.id,
-                "cumulative_score": conversation.cumulative_score,
-            },
-        )
-        return {
-            "status_code": 502,
-            "payload": {"error": {"message": f"Upstream LLM error: {exc}"}},
-            "prompt": prompt,
-            "decision": "ERROR",
-            "content": str(exc),
-            "scores": scores,
-            "latencies_ms": latencies_ms,
-            "total_latency_ms": total_latency_ms,
-            "detail": detail,
-            "failed_filters": [],
-            "conversation_id": conversation.id,
-        }
+        input_result = input_validator.validate(prompt)
+        input_scores = _prefixed_scores("input", input_result.scores_summary)
+        input_latencies = _prefixed_latencies("input", input_result.latencies_summary)
 
-    assistant_content = _extract_assistant_content(upstream_response)
-    pii_result = mask(assistant_content)
-    assistant_content = pii_result.text
-    if pii_result.masked:
-        _set_assistant_content(upstream_response, assistant_content)
+        # Primary per-prompt score: max P(injection) across the input
+        # classifiers. This is what feeds the conversation-level cumulative gate.
+        primary_score = _primary_input_score(input_result)
 
-    pii_detail = ""
-    if pii_result.masked:
-        pii_detail = f"PII masked: {', '.join(pii_result.masked_entities)}"
-
-    if output_validator is not None:
-        output_result = await output_validator.validate(assistant_content)
-        output_scores = _prefixed_scores("output", output_result.scores_summary)
-        output_latencies = _prefixed_latencies("output", output_result.latencies_summary)
-        scores.update(output_scores)
-        latencies_ms.update(output_latencies)
-
-        if not output_result.passed:
-            blocked_by = [result.filter_name for result in output_result.failed_filters]
+        if not input_result.passed:
+            blocked_by = [result.filter_name for result in input_result.failed_filters]
             logger.warning(
-                "Blocked response with output classifiers: %s", ", ".join(blocked_by)
+                "Blocked prompt with input classifiers: %s", ", ".join(blocked_by)
             )
-            detail = f"Blocked by output classifiers: {', '.join(blocked_by)}"
-            if pii_detail:
-                detail = f"{detail} | {pii_detail}"
+            detail = f"Blocked by input classifiers: {', '.join(blocked_by)}"
             refusal_response = build_openai_response(settings.refusal_message)
             total_latency_ms = _elapsed_ms(request_started_at)
-            # Output was blocked, but the input passed cleanly. Record the
-            # turn against the input score (which the user actually sent),
-            # not against the model's response.
             conv_state.record_turn(
-                app, conversation, prompt=prompt, score=primary_score, decision="DROPPED"
+                app, conversation, prompt=prompt, score=primary_score, decision="BLOCKED"
             )
             _attach_conversation(refusal_response, conversation)
             log_decision(
                 app,
                 {
-                    "type": "OUTPUT_BLOCKED",
+                    "type": "INPUT_BLOCKED",
                     "prompt": prompt,
-                    "response": assistant_content or settings.refusal_message,
-                    "decision": "DROPPED",
-                    "scores": scores,
-                    "latencies_ms": latencies_ms,
+                    "response": settings.refusal_message,
+                    "decision": "BLOCKED",
+                    "scores": input_scores,
+                    "latencies_ms": input_latencies,
                     "total_latency_ms": total_latency_ms,
                     "detail": detail,
                     "failed_filters": blocked_by,
@@ -531,53 +416,221 @@ async def process_chat_completion(
                 "status_code": 200,
                 "payload": refusal_response,
                 "prompt": prompt,
-                "decision": "DROPPED",
+                "decision": "BLOCKED",
                 "content": settings.refusal_message,
-                "scores": scores,
-                "latencies_ms": latencies_ms,
+                "scores": input_scores,
+                "latencies_ms": input_latencies,
                 "total_latency_ms": total_latency_ms,
                 "detail": detail,
                 "failed_filters": blocked_by,
                 "conversation_id": conversation.id,
             }
 
-    detail = (
-        "Output classifiers disabled; upstream response returned without output validation"
-        if not settings.enable_output_classifiers
-        else "All classifiers passed"
-    )
-    if pii_detail:
-        detail = f"{detail} | {pii_detail}"
-    total_latency_ms = _elapsed_ms(request_started_at)
-    conv_state.record_turn(
-        app, conversation, prompt=prompt, score=primary_score, decision="ALLOWED"
-    )
-    _attach_conversation(upstream_response, conversation)
-    log_decision(
-        app,
-        {
-            "type": "PASSED",
+        # The per-prompt classifier passed, but adding this prompt's score
+        # might tip the conversation's *windowed* cumulative over threshold.
+        # `predict_windowed_cumulative` simulates the append (so we can refuse
+        # before mutating state); `record_turn` below applies the same math
+        # for real once we've decided the turn's outcome.
+        cum_threshold = float(settings.conversation_cumulative_threshold)
+        pending_cumulative = conv_state.predict_windowed_cumulative(
+            app, conversation, primary_score
+        )
+        if pending_cumulative >= cum_threshold:
+            # The "last N turns" the predictor actually summed: the new
+            # turn plus the most recent (window_size - 1) existing turns,
+            # capped by how many turns we have.
+            window = int(settings.conversation_window_size)
+            summed_turns = min(len(conversation.turns), max(0, window - 1)) + 1
+            detail = (
+                f"Blocked by conversation cumulative score "
+                f"({pending_cumulative:.4f} ≥ {cum_threshold:.4f}) over the "
+                f"last {summed_turns} turn(s)"
+            )
+            logger.warning("Blocked prompt by conversation gate: %s", detail)
+            refusal_response = build_openai_response(settings.refusal_message)
+            total_latency_ms = _elapsed_ms(request_started_at)
+            conv_state.record_turn(
+                app, conversation, prompt=prompt, score=primary_score, decision="BLOCKED"
+            )
+            _attach_conversation(refusal_response, conversation)
+            log_decision(
+                app,
+                {
+                    "type": "CONVERSATION_BLOCKED",
+                    "prompt": prompt,
+                    "response": settings.refusal_message,
+                    "decision": "BLOCKED",
+                    "scores": input_scores,
+                    "latencies_ms": input_latencies,
+                    "total_latency_ms": total_latency_ms,
+                    "detail": detail,
+                    "failed_filters": ["conversation_cumulative"],
+                    "conversation_id": conversation.id,
+                    "cumulative_score": conversation.cumulative_score,
+                },
+            )
+            return {
+                "status_code": 200,
+                "payload": refusal_response,
+                "prompt": prompt,
+                "decision": "BLOCKED",
+                "content": settings.refusal_message,
+                "scores": input_scores,
+                "latencies_ms": input_latencies,
+                "total_latency_ms": total_latency_ms,
+                "detail": detail,
+                "failed_filters": ["conversation_cumulative"],
+                "conversation_id": conversation.id,
+            }
+
+        scores = dict(input_scores)
+        latencies_ms = dict(input_latencies)
+        api_key = resolve_upstream_api_key(settings, auth_header)
+        try:
+            upstream_response = await forward_to_llm(
+                request_body=body,
+                llm_api_url=settings.upstream_chat_completions_url,
+                api_key=api_key,
+            )
+        except Exception as exc:
+            logger.error("Upstream LLM error: %s", exc)
+            detail = f"Upstream error: {exc}"
+            total_latency_ms = _elapsed_ms(request_started_at)
+            # Don't penalize the conversation for an upstream failure — record the
+            # turn with score=0 so cumulative isn't poisoned by infrastructure noise.
+            conv_state.record_turn(
+                app, conversation, prompt=prompt, score=0.0, decision="ERROR"
+            )
+            log_decision(
+                app,
+                {
+                    "type": "UPSTREAM_ERROR",
+                    "prompt": prompt,
+                    "response": str(exc),
+                    "decision": "ERROR",
+                    "scores": scores,
+                    "latencies_ms": latencies_ms,
+                    "total_latency_ms": total_latency_ms,
+                    "detail": detail,
+                    "conversation_id": conversation.id,
+                    "cumulative_score": conversation.cumulative_score,
+                },
+            )
+            return {
+                "status_code": 502,
+                "payload": {"error": {"message": f"Upstream LLM error: {exc}"}},
+                "prompt": prompt,
+                "decision": "ERROR",
+                "content": str(exc),
+                "scores": scores,
+                "latencies_ms": latencies_ms,
+                "total_latency_ms": total_latency_ms,
+                "detail": detail,
+                "failed_filters": [],
+                "conversation_id": conversation.id,
+            }
+
+        assistant_content = _extract_assistant_content(upstream_response)
+        pii_result = mask(assistant_content)
+        assistant_content = pii_result.text
+        if pii_result.masked:
+            _set_assistant_content(upstream_response, assistant_content)
+
+        pii_detail = ""
+        if pii_result.masked:
+            pii_detail = f"PII masked: {', '.join(pii_result.masked_entities)}"
+
+        if output_validator is not None:
+            output_result = await output_validator.validate(assistant_content)
+            output_scores = _prefixed_scores("output", output_result.scores_summary)
+            output_latencies = _prefixed_latencies("output", output_result.latencies_summary)
+            scores.update(output_scores)
+            latencies_ms.update(output_latencies)
+
+            if not output_result.passed:
+                blocked_by = [result.filter_name for result in output_result.failed_filters]
+                logger.warning(
+                    "Blocked response with output classifiers: %s", ", ".join(blocked_by)
+                )
+                detail = f"Blocked by output classifiers: {', '.join(blocked_by)}"
+                if pii_detail:
+                    detail = f"{detail} | {pii_detail}"
+                refusal_response = build_openai_response(settings.refusal_message)
+                total_latency_ms = _elapsed_ms(request_started_at)
+                # Output was blocked, but the input passed cleanly. Record the
+                # turn against the input score (which the user actually sent),
+                # not against the model's response.
+                conv_state.record_turn(
+                    app, conversation, prompt=prompt, score=primary_score, decision="DROPPED"
+                )
+                _attach_conversation(refusal_response, conversation)
+                log_decision(
+                    app,
+                    {
+                        "type": "OUTPUT_BLOCKED",
+                        "prompt": prompt,
+                        "response": assistant_content or settings.refusal_message,
+                        "decision": "DROPPED",
+                        "scores": scores,
+                        "latencies_ms": latencies_ms,
+                        "total_latency_ms": total_latency_ms,
+                        "detail": detail,
+                        "failed_filters": blocked_by,
+                        "conversation_id": conversation.id,
+                        "cumulative_score": conversation.cumulative_score,
+                    },
+                )
+                return {
+                    "status_code": 200,
+                    "payload": refusal_response,
+                    "prompt": prompt,
+                    "decision": "DROPPED",
+                    "content": settings.refusal_message,
+                    "scores": scores,
+                    "latencies_ms": latencies_ms,
+                    "total_latency_ms": total_latency_ms,
+                    "detail": detail,
+                    "failed_filters": blocked_by,
+                    "conversation_id": conversation.id,
+                }
+
+        detail = (
+            "Output classifiers disabled; upstream response returned without output validation"
+            if not settings.enable_output_classifiers
+            else "All classifiers passed"
+        )
+        if pii_detail:
+            detail = f"{detail} | {pii_detail}"
+        total_latency_ms = _elapsed_ms(request_started_at)
+        conv_state.record_turn(
+            app, conversation, prompt=prompt, score=primary_score, decision="ALLOWED"
+        )
+        _attach_conversation(upstream_response, conversation)
+        log_decision(
+            app,
+            {
+                "type": "PASSED",
+                "prompt": prompt,
+                "response": assistant_content or "(empty response)",
+                "decision": "ALLOWED",
+                "scores": scores,
+                "latencies_ms": latencies_ms,
+                "total_latency_ms": total_latency_ms,
+                "detail": detail,
+                "conversation_id": conversation.id,
+                "cumulative_score": conversation.cumulative_score,
+            },
+        )
+        return {
+            "status_code": 200,
+            "payload": upstream_response,
             "prompt": prompt,
-            "response": assistant_content or "(empty response)",
             "decision": "ALLOWED",
+            "content": assistant_content,
             "scores": scores,
             "latencies_ms": latencies_ms,
             "total_latency_ms": total_latency_ms,
             "detail": detail,
+            "failed_filters": [],
             "conversation_id": conversation.id,
-            "cumulative_score": conversation.cumulative_score,
-        },
-    )
-    return {
-        "status_code": 200,
-        "payload": upstream_response,
-        "prompt": prompt,
-        "decision": "ALLOWED",
-        "content": assistant_content,
-        "scores": scores,
-        "latencies_ms": latencies_ms,
-        "total_latency_ms": total_latency_ms,
-        "detail": detail,
-        "failed_filters": [],
-        "conversation_id": conversation.id,
-    }
+        }
