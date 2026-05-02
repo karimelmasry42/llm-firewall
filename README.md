@@ -15,7 +15,7 @@
 | | |
 |---|---|
 | **Shipped input classifier** | `meta-llama/Llama-Prompt-Guard-2-86M` (multilingual, 102+ languages) |
-| **In-distribution F1** | **0.839** on 1,455-prompt held-out test (vs. legacy SVM 0.712) |
+| **In-distribution F1** | **0.839** on a 1,455-prompt test slice held out from the training pool (vs. legacy SVM 0.712) |
 | **Multilingual stress test (DavidTKeane)** | **F1 0.824** — beats the previous English-only baseline by **+16.3 points** |
 | **Adversarial benchmark (JailbreakBench)** | **F1 0.723** — up from **0.000** with the prior model |
 | **Datasets combined** | 8 sources, **44,603 raw rows → 14,557 deduped & balanced** |
@@ -88,7 +88,7 @@ The shipped model (rightmost bar in each group) is the only candidate that's com
   <img src="docs/img/threshold_sweep.png" alt="Threshold sweep showing F1 peaks at 0.001 for our combined dataset" width="900"/>
 </p>
 
-`Llama-Prompt-Guard-2-86M` is trained well, but its score distribution is **peaky** — most injection probability mass sits below 0.01 even for true positives. The default 0.5 threshold misses everything subtle. A 9-point sweep on `val.parquet` placed the F1-optimal threshold at **0.001**, which we baked into [`registry.py`](llm_firewall/classifiers/registry.py) and verified on the held-out test set.
+`Llama-Prompt-Guard-2-86M` is trained well, but its score distribution is **peaky** — most injection probability mass sits below 0.01 even for true positives. The default 0.5 threshold misses everything subtle. A 9-point sweep on `val.parquet` placed the F1-optimal threshold at **0.001**, which we baked into [`registry.py`](llm_firewall/classifiers/registry.py) and verified on the in-distribution test slice (and on both off-distribution benchmarks below).
 
 This single calibration change moved DavidTKeane F1 from 0.485 to **0.824** and JailbreakBench F1 from 0.448 to **0.723** without touching the model.
 
