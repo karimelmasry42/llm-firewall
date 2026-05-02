@@ -99,12 +99,9 @@ async def main() -> int:
             await browser.close()
             return 2
 
-        # 1) Full overview shot before any chat activity.
-        await page.wait_for_timeout(1200)  # let stats/logs/config fetches settle
-        await page.screenshot(path=str(OUT_DIR / "dashboard_overview.png"), full_page=True)
-
-        # 2) Drive the conversation UI through a benign sequence. Snapshot
+        # 1) Drive the conversation UI through a benign sequence. Snapshot
         # while the cumulative bar is still well under the threshold.
+        await page.wait_for_timeout(1200)  # let config/snapshot fetches settle
         await _start_new_conversation(page)
         await _send_one(page, "What is the capital of France?")
         await _send_one(page, "And the capital of Germany?")
@@ -112,7 +109,7 @@ async def main() -> int:
         if panel:
             await panel.screenshot(path=str(OUT_DIR / "conversation_panel.png"))
 
-        # 3) One adversarial prompt is enough to trip the windowed gate
+        # 2) One adversarial prompt is enough to trip the windowed gate
         # against the production threshold (cumulative 0.01, per-prompt
         # threshold 0.001 → a real injection scores ~0.99). Send one,
         # confirm the conversation is now locked, then snapshot.
@@ -122,6 +119,13 @@ async def main() -> int:
         )
         if panel:
             await panel.screenshot(path=str(OUT_DIR / "conversation_blocked.png"))
+
+        # 3) Full overview shot AFTER activity so the hero image shows the
+        # firewall actually doing something — populated conversation panel,
+        # populated stats, populated decision log. Captured last so all
+        # the prior screenshots are framed on a fresh-conversation panel
+        # rather than mid-history.
+        await page.screenshot(path=str(OUT_DIR / "dashboard_overview.png"), full_page=True)
 
         # 4) Decision log table.
         log = await page.query_selector(".log-section")
