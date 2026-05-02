@@ -12,13 +12,10 @@ from fastapi import FastAPI
 
 from llm_firewall.api import dashboard as dashboard_routes
 from llm_firewall.api import routes as chat_routes
-from llm_firewall.api._processing import (
-    flatten_classifier_specs,
-    preload_validators,
-)
+from llm_firewall.api._processing import preload_validators
 from llm_firewall.classifiers.registry import (
     ClassifierSpec,
-    get_input_classifier_specs_by_language,
+    get_input_classifier_specs,
     get_output_classifier_specs,
 )
 from llm_firewall.core.config import Settings
@@ -47,7 +44,6 @@ logging.getLogger("uvicorn.access").addFilter(_QuietAccessLogFilter())
 def create_app(
     settings: Settings | None = None,
     input_classifier_specs: list[ClassifierSpec] | None = None,
-    input_classifier_specs_by_language: dict[str, list[ClassifierSpec]] | None = None,
     output_classifier_specs: list[ClassifierSpec] | None = None,
 ) -> FastAPI:
     """Create the FastAPI app with lazy-loaded validators."""
@@ -59,23 +55,11 @@ def create_app(
 
     app.state.settings = settings or Settings()
     app.state.decision_log = []
-
-    routed_input_specs = (
-        {
-            language: list(specs)
-            for language, specs in input_classifier_specs_by_language.items()
-        }
-        if input_classifier_specs_by_language is not None
-        else (
-            {"en": list(input_classifier_specs)}
-            if input_classifier_specs is not None
-            else get_input_classifier_specs_by_language()
-        )
-    )
-    app.state.input_validators = {}
+    app.state.input_validator = None
     app.state.output_validator = None
-    app.state.input_classifier_specs_by_language = routed_input_specs
-    app.state.input_classifier_specs = flatten_classifier_specs(routed_input_specs)
+    app.state.input_classifier_specs = list(
+        input_classifier_specs or get_input_classifier_specs()
+    )
     app.state.output_classifier_specs = list(
         output_classifier_specs or get_output_classifier_specs()
     )

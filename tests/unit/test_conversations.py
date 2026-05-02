@@ -7,12 +7,17 @@ from types import SimpleNamespace
 from llm_firewall.api import conversations as conv_state
 
 
-def _fake_app(threshold: float = 1.5, max_tracked: int = 1000):
+def _fake_app(
+    threshold: float = 0.01,
+    max_tracked: int = 1000,
+    window_size: int = 30,
+):
     return SimpleNamespace(
         state=SimpleNamespace(
             settings=SimpleNamespace(
                 conversation_cumulative_threshold=threshold,
                 conversation_max_tracked=max_tracked,
+                conversation_window_size=window_size,
             )
         )
     )
@@ -34,7 +39,7 @@ def test_get_or_create_honors_caller_id():
 
 
 def test_record_turn_accumulates_and_blocks():
-    app = _fake_app(threshold=0.6)
+    app = _fake_app(threshold=0.6, window_size=30)
     conv = conv_state.get_or_create(app, "block-test")
     # Three borderline-injection prompts (each below per-prompt threshold but
     # together cross the cumulative gate at 0.6).
@@ -48,6 +53,60 @@ def test_record_turn_accumulates_and_blocks():
     assert conv.cumulative_score >= 0.6
     assert "cumulative" in (conv.blocked_reason or "")
     assert len(conv.turns) == 3
+
+
+def test_cumulative_score_uses_sliding_window_not_all_time():
+    """A small window must drop old scores out of the cumulative once
+    enough new turns have arrived. Critical so benign long conversations
+    don't trip the gate just because they're long."""
+    app = _fake_app(threshold=10.0, window_size=3)
+    conv = conv_state.get_or_create(app, "window-test")
+    # Five turns with score=1 each. Window=3 → cumulative should reflect
+    # only the last 3 turns at all times.
+    for _ in range(5):
+        conv_state.record_turn(app, conv, prompt="x", score=1.0, decision="ALLOWED")
+    assert len(conv.turns) == 5
+    # Last 3 turns sum to 3.0, NOT 5.0 (which would be all-time sum).
+    assert abs(conv.cumulative_score - 3.0) < 1e-9
+    # cumulative_score_after on the latest turn matches the windowed total.
+    assert abs(conv.turns[-1].cumulative_score_after - 3.0) < 1e-9
+
+
+def test_blocked_flag_is_sticky_after_window_recovery():
+    """Once the cumulative trips the threshold the conversation must stay
+    locked even if the windowed sum later drops back below threshold —
+    attackers cannot dilute their way out by appending benign turns."""
+    app = _fake_app(threshold=1.5, window_size=2)
+    conv = conv_state.get_or_create(app, "sticky-test")
+    # Two suspicious turns trip the gate (window=2 → sum=2.0).
+    conv_state.record_turn(app, conv, prompt="x", score=1.0, decision="ALLOWED")
+    conv_state.record_turn(app, conv, prompt="x", score=1.0, decision="ALLOWED")
+    assert conv.blocked is True
+    blocked_reason = conv.blocked_reason
+    # Two benign turns drop the windowed sum back to 0.0.
+    conv_state.record_turn(app, conv, prompt="x", score=0.0, decision="ALLOWED")
+    conv_state.record_turn(app, conv, prompt="x", score=0.0, decision="ALLOWED")
+    assert conv.cumulative_score == 0.0
+    # But blocked stays True. Reason string is preserved (not overwritten).
+    assert conv.blocked is True
+    assert conv.blocked_reason == blocked_reason
+
+
+def test_predict_windowed_cumulative_simulates_append():
+    """The predictor returns the windowed sum as-if the new score were
+    appended, without mutating any state."""
+    app = _fake_app(threshold=10.0, window_size=3)
+    conv = conv_state.get_or_create(app, "predict-test")
+    conv_state.record_turn(app, conv, prompt="x", score=1.0, decision="ALLOWED")
+    conv_state.record_turn(app, conv, prompt="x", score=1.0, decision="ALLOWED")
+    conv_state.record_turn(app, conv, prompt="x", score=1.0, decision="ALLOWED")
+    # Window=3, current cumulative=3.0. Predicting score=2.0 should drop
+    # the oldest turn (1.0) and add 2.0 → predicted=4.0.
+    predicted = conv_state.predict_windowed_cumulative(app, conv, 2.0)
+    assert abs(predicted - 4.0) < 1e-9
+    # The conversation state didn't change.
+    assert len(conv.turns) == 3
+    assert abs(conv.cumulative_score - 3.0) < 1e-9
 
 
 def test_reset_drops_conversation():

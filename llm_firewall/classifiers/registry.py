@@ -127,20 +127,6 @@ INPUT_CLASSIFIER_SPECS = [
 ]
 
 
-# A single multilingual classifier handles every language. The dict still
-# enumerates `en` and `es` because the API preloads validators by iterating
-# over its keys (see `_processing.preload_validators`) — keeping both keys
-# preserves the per-language validator preload behavior. For any other
-# language code, callers should go through
-# `get_input_classifier_specs_for_language()` (or rely on the API's
-# `_resolve_input_route_language` fallback) which returns the same specs
-# rather than an empty list.
-INPUT_CLASSIFIER_SPECS_BY_LANGUAGE = {
-    "en": list(INPUT_CLASSIFIER_SPECS),
-    "es": list(INPUT_CLASSIFIER_SPECS),
-}
-
-
 OUTPUT_CLASSIFIER_SPECS = [
     ClassifierSpec(
         name="tiny_toxic_detector",
@@ -156,31 +142,6 @@ OUTPUT_CLASSIFIER_SPECS = [
 
 def get_input_classifier_specs() -> list[ClassifierSpec]:
     """Return the hard-coded input classifier registry."""
-    return list(INPUT_CLASSIFIER_SPECS)
-
-
-def get_input_classifier_specs_by_language() -> dict[str, list[ClassifierSpec]]:
-    """Return the hard-coded input classifiers grouped by routed language."""
-    return {
-        language: list(specs)
-        for language, specs in INPUT_CLASSIFIER_SPECS_BY_LANGUAGE.items()
-    }
-
-
-def get_input_classifier_specs_for_language(language: str) -> list[ClassifierSpec]:
-    """Return input classifier specs for any language code, with fallback.
-
-    The runtime classifier is multilingual, so unknown language codes (e.g.
-    `fr`, `zh`, `pt-BR`) get the same specs as English. Production callers
-    going through the API already get fallback behavior at the route layer
-    (`_resolve_input_route_language`); this helper is the single-call
-    equivalent for tests and for any future caller that needs specs by
-    language without round-tripping through `app.state`.
-    """
-    specs = INPUT_CLASSIFIER_SPECS_BY_LANGUAGE.get(language)
-    if specs is not None:
-        return list(specs)
-    # Unknown language: fall back to the canonical (multilingual) specs.
     return list(INPUT_CLASSIFIER_SPECS)
 
 

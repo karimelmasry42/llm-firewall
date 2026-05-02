@@ -13,10 +13,6 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI
 
-from llm_firewall.classifiers.language_router import (
-    InputRouteDecision,
-    route_input_text,
-)
 from llm_firewall.classifiers.registry import ClassifierSpec
 from llm_firewall.core.config import Settings
 from llm_firewall.core.proxy import forward_to_llm
@@ -29,10 +25,10 @@ from llm_firewall.validators.output import OutputValidator
 logger = logging.getLogger("llm_firewall")
 
 MAX_LOG_SIZE = 500
-INPUT_WARMUP_TEXT_BY_LANGUAGE = {
-    "en": "What is the capital of France?",
-    "es": "Hola, necesito ayuda con mi cuenta.",
-}
+# The shipped classifier (Llama-Prompt-Guard-2-86M) is multilingual, so
+# warming it on a single English prompt exercises the same code paths as
+# any other language would.
+INPUT_WARMUP_TEXT = "What is the capital of France?"
 OUTPUT_WARMUP_TEXT = "This is a routine warmup response."
 
 
@@ -105,30 +101,6 @@ def list_classifier_names(classifier_specs: list[ClassifierSpec]) -> list[str]:
     return [spec.display_name or spec.name for spec in classifier_specs]
 
 
-def flatten_classifier_specs(
-    classifier_specs_by_language: dict[str, list[ClassifierSpec]],
-) -> list[ClassifierSpec]:
-    """Flatten routed classifier specs while preserving order and de-duplicating paths."""
-    flattened: list[ClassifierSpec] = []
-    seen_keys: set[tuple[str, str | None]] = set()
-    for specs in classifier_specs_by_language.values():
-        for spec in specs:
-            spec_key = (spec.name, str(spec.path) if spec.path is not None else None)
-            if spec_key in seen_keys:
-                continue
-            seen_keys.add(spec_key)
-            flattened.append(spec)
-    return flattened
-
-
-def _format_input_route_detail(route: InputRouteDecision) -> str:
-    """Return a concise string describing one input route decision."""
-    return (
-        f"Input language router: {route.lang} "
-        f"({route.confidence:.4f}, {route.method}) -> {route.target}"
-    )
-
-
 def log_decision(app: FastAPI, entry: dict) -> None:
     """Add a decision entry to the in-memory log and broadcast it.
 
@@ -164,8 +136,7 @@ def _primary_input_score(input_result) -> float:
 
     The input ensemble may run multiple classifiers; we take the maximum of
     their `confidence` values (each is P(injection) per the contract in
-    HFSequenceClassifier and PickleClassifier). The language router doesn't
-    contribute — it isn't a security signal.
+    HFSequenceClassifier and PickleClassifier).
     """
     if not input_result.results:
         return 0.0
@@ -208,38 +179,12 @@ def _build_model_error_response(
     }
 
 
-def _resolve_input_route_language(app: FastAPI, language: str) -> str:
-    """Resolve an input route language to a configured validator bucket."""
-    if language in app.state.input_classifier_specs_by_language:
-        return language
-    if "en" in app.state.input_classifier_specs_by_language:
-        return "en"
-    return next(iter(app.state.input_classifier_specs_by_language), language)
-
-
-def get_input_validator(app: FastAPI, language: str = "en") -> InputValidator:
-    validators = getattr(app.state, "input_validators", None)
-    if validators is None:
-        validators = {}
-        app.state.input_validators = validators
-
-    resolved_language = _resolve_input_route_language(app, language)
-    validator = validators.get(resolved_language)
+def get_input_validator(app: FastAPI) -> InputValidator:
+    validator = getattr(app.state, "input_validator", None)
     if validator is None:
-        validator = InputValidator(
-            app.state.input_classifier_specs_by_language[resolved_language]
-        )
-        validators[resolved_language] = validator
+        validator = InputValidator(app.state.input_classifier_specs)
+        app.state.input_validator = validator
     return validator
-
-
-def _get_input_route_target_name(app: FastAPI, language: str) -> str:
-    """Return a human-readable label for one routed input branch."""
-    resolved_language = _resolve_input_route_language(app, language)
-    names = list_classifier_names(
-        app.state.input_classifier_specs_by_language[resolved_language]
-    )
-    return ", ".join(names) if names else "configured input filter"
 
 
 def get_output_validator(app: FastAPI) -> OutputValidator:
@@ -252,18 +197,10 @@ def get_output_validator(app: FastAPI) -> OutputValidator:
 
 def preload_validators(app: FastAPI) -> None:
     """Warm validator ensembles so first-request latency reflects steady state."""
-    for language in app.state.input_classifier_specs_by_language:
-        try:
-            validator = get_input_validator(app, language)
-            validator.warmup(
-                INPUT_WARMUP_TEXT_BY_LANGUAGE.get(
-                    language, INPUT_WARMUP_TEXT_BY_LANGUAGE["en"]
-                )
-            )
-        except Exception as exc:
-            logger.warning(
-                "Failed to preload input validators for %s: %s", language, exc
-            )
+    try:
+        get_input_validator(app).warmup(INPUT_WARMUP_TEXT)
+    except Exception as exc:
+        logger.warning("Failed to preload input validator: %s", exc)
 
     if app.state.settings.enable_output_classifiers:
         try:
@@ -341,16 +278,8 @@ async def process_chat_completion(
             "conversation_id": conversation.id,
         }
 
-    route_decision = route_input_text(
-        prompt,
-        english_filter_name=_get_input_route_target_name(app, "en"),
-        spanish_filter_name=_get_input_route_target_name(app, "es"),
-    )
-    route_detail = _format_input_route_detail(route_decision)
-    route_language = _resolve_input_route_language(app, route_decision.lang)
-
     try:
-        input_validator = get_input_validator(app, route_language)
+        input_validator = get_input_validator(app)
     except Exception as exc:
         logger.error("Failed to load input validators: %s", exc)
         log_decision(
@@ -360,22 +289,18 @@ async def process_chat_completion(
                 "prompt": prompt,
                 "response": str(exc),
                 "decision": "ERROR",
-                "scores": {"input:Language Router": route_decision.confidence},
-                "latencies_ms": {"input:Language Router": route_decision.latency_ms},
+                "scores": {},
+                "latencies_ms": {},
                 "total_latency_ms": _elapsed_ms(request_started_at),
-                "detail": f"Input model error: {exc} | {route_detail}",
+                "detail": f"Input model error: {exc}",
             },
         )
-        result = _build_model_error_response(
+        return _build_model_error_response(
             prompt,
             "Input",
             exc,
             _elapsed_ms(request_started_at),
         )
-        result["scores"] = {"input:Language Router": route_decision.confidence}
-        result["latencies_ms"] = {"input:Language Router": route_decision.latency_ms}
-        result["detail"] = f"{result['detail']} | {route_detail}"
-        return result
 
     output_validator = None
     if settings.enable_output_classifiers:
@@ -406,12 +331,9 @@ async def process_chat_completion(
     input_result = input_validator.validate(prompt)
     input_scores = _prefixed_scores("input", input_result.scores_summary)
     input_latencies = _prefixed_latencies("input", input_result.latencies_summary)
-    input_scores["input:Language Router"] = route_decision.confidence
-    input_latencies["input:Language Router"] = route_decision.latency_ms
 
-    # Primary per-prompt score: max P(injection) across the input classifiers
-    # (excluding the language router which isn't a security signal). This
-    # is what feeds the conversation-level cumulative gate.
+    # Primary per-prompt score: max P(injection) across the input
+    # classifiers. This is what feeds the conversation-level cumulative gate.
     primary_score = _primary_input_score(input_result)
 
     if not input_result.passed:
@@ -419,9 +341,7 @@ async def process_chat_completion(
         logger.warning(
             "Blocked prompt with input classifiers: %s", ", ".join(blocked_by)
         )
-        detail = (
-            f"Blocked by input classifiers: {', '.join(blocked_by)} | {route_detail}"
-        )
+        detail = f"Blocked by input classifiers: {', '.join(blocked_by)}"
         refusal_response = build_openai_response(settings.refusal_message)
         total_latency_ms = _elapsed_ms(request_started_at)
         conv_state.record_turn(
@@ -458,17 +378,20 @@ async def process_chat_completion(
             "conversation_id": conversation.id,
         }
 
-    # The per-prompt classifier passed, but adding this prompt's score might
-    # tip the conversation's running total over the cumulative threshold.
-    # Probe by tentatively adding the score and checking, without mutating
-    # state until we know the final decision.
+    # The per-prompt classifier passed, but adding this prompt's score
+    # might tip the conversation's *windowed* cumulative over threshold.
+    # `predict_windowed_cumulative` simulates the append (so we can refuse
+    # before mutating state); `record_turn` below applies the same math
+    # for real once we've decided the turn's outcome.
     cum_threshold = float(settings.conversation_cumulative_threshold)
-    if (conversation.cumulative_score + primary_score) >= cum_threshold:
+    pending_cumulative = conv_state.predict_windowed_cumulative(
+        app, conversation, primary_score
+    )
+    if pending_cumulative >= cum_threshold:
         detail = (
             f"Blocked by conversation cumulative score "
-            f"({conversation.cumulative_score + primary_score:.4f} ≥ "
-            f"{cum_threshold:.4f}) after {len(conversation.turns) + 1} turn(s) | "
-            f"{route_detail}"
+            f"({pending_cumulative:.4f} ≥ {cum_threshold:.4f}) over the "
+            f"last {min(len(conversation.turns) + 1, int(settings.conversation_window_size))} turn(s)"
         )
         logger.warning("Blocked prompt by conversation gate: %s", detail)
         refusal_response = build_openai_response(settings.refusal_message)
@@ -518,7 +441,7 @@ async def process_chat_completion(
         )
     except Exception as exc:
         logger.error("Upstream LLM error: %s", exc)
-        detail = f"Upstream error: {exc} | {route_detail}"
+        detail = f"Upstream error: {exc}"
         total_latency_ms = _elapsed_ms(request_started_at)
         # Don't penalize the conversation for an upstream failure — record the
         # turn with score=0 so cumulative isn't poisoned by infrastructure noise.
@@ -576,9 +499,7 @@ async def process_chat_completion(
             logger.warning(
                 "Blocked response with output classifiers: %s", ", ".join(blocked_by)
             )
-            detail = (
-                f"Blocked by output classifiers: {', '.join(blocked_by)} | {route_detail}"
-            )
+            detail = f"Blocked by output classifiers: {', '.join(blocked_by)}"
             if pii_detail:
                 detail = f"{detail} | {pii_detail}"
             refusal_response = build_openai_response(settings.refusal_message)
@@ -625,7 +546,6 @@ async def process_chat_completion(
         if not settings.enable_output_classifiers
         else "All classifiers passed"
     )
-    detail = f"{detail} | {route_detail}"
     if pii_detail:
         detail = f"{detail} | {pii_detail}"
     total_latency_ms = _elapsed_ms(request_started_at)

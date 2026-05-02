@@ -53,54 +53,45 @@ Then point `LLM_FIREWALL_UPSTREAM_CHAT_COMPLETIONS_URL=http://localhost:9000/v1/
 
 ```mermaid
 flowchart LR
-    C[Client] -->|prompt| LR[Language Router]
-    LR --> IC[Input Classifier<br/>Llama-Prompt-Guard-2-86M]
-    IC -->|allowed + cumulative ok| LLM[Upstream LLM]
-    IC -.->|blocked or<br/>conversation gated| Refuse[(Refusal)]
-    LLM --> PII[PII Masker<br/>regex]
+    C[Client] -->|prompt| IC[Input Classifier<br/>Llama-Prompt-Guard-2-86M]
+    IC -->|allowed| LLM[Upstream LLM]
+    IC -.->|blocked| Refuse[(Refusal)]
+    LLM --> PII[PII Masker]
     PII --> OC[Output Classifier<br/>Tiny-Toxic-Detector]
     OC -->|allowed| C2[Client]
-    OC -.->|toxic| Refuse2[(Refusal)]
-    IC -.-> Conv[(Conversation Cumulative<br/>Score Tracker)]
-    Conv -.-> IC
+    OC -.->|toxic| Refuse
     style IC fill:#0f9d58,stroke:#34a853,color:#fff
     style OC fill:#4285f4,stroke:#4285f4,color:#fff
     style PII fill:#fbbc04,stroke:#fbbc04,color:#202124
-    style Conv fill:#ea4335,stroke:#ea4335,color:#fff
 ```
 
-Per request:
+Each request runs through three stages, fail-closed: only fully-approved prompts and responses pass through.
 
-1. **Language router** classifies the prompt language (fasttext / lingua / heuristic).
-2. **Input classifier** scores `P(injection)`. If the per-prompt score crosses the threshold, the request is refused immediately. Either way, the score is added to the conversation's running cumulative.
-3. **Conversation gate**: if the cumulative across this conversation crosses the configured threshold, every further prompt in that conversation is refused — even benign ones — until the caller starts a new conversation. Catches multi-step social engineering.
-4. **Upstream LLM** is called only if both gates pass.
-5. **PII masker** redacts emails, phones, URLs, credit cards, API keys, etc. from the response in place — always runs.
-6. **Output classifier** checks the masked response. If anything blocks, the refusal is returned.
-
-Fail-closed: only fully-approved prompts and responses pass through.
+1. **Input classifier** scores `P(injection)`. Per-prompt or conversation-cumulative gate refuses → the upstream LLM never sees the prompt. Conversation gate detail in [Conversation-aware blocking](#conversation-aware-blocking).
+2. **Upstream LLM** is called only after the input gate passes.
+3. **PII masker → output classifier**: emails, phone numbers, credit cards etc. are scrubbed from the response in place; the masked text is then checked for toxicity. Either step can refuse.
 
 ---
 
 ## The input classifier
 
-Zooming into the green box from the pipeline above. This is the component doing most of the security work — every approved prompt was scored by exactly this path before reaching your model.
+Zooming into the green box from the pipeline above. Every approved prompt is scored along exactly this path:
 
 ```mermaid
 flowchart TB
-    P[Raw prompt] --> N[Whitespace normalize<br/>+ Llama tokenizer · no truncation]
-    N --> SHORT{≤ 512 tokens ?}
-    SHORT -->|yes| M[Llama-Prompt-Guard-2-86M<br/>86M params · BERT-style<br/>meta-llama/Llama-Prompt-Guard-2-86M]
-    SHORT -->|no| W[Sliding window:<br/>512-token chunks · 64-token overlap<br/>score every chunk]
+    P[Raw prompt] --> N[Tokenize · no truncation]
+    N --> SHORT{≤ 512 tokens?}
+    SHORT -->|yes| M[Llama-Prompt-Guard-2-86M<br/>86M params · multilingual]
+    SHORT -->|no| W[Sliding window<br/>512 / overlap 64 · max score]
     W --> M
-    M --> S[softmax → P injection<br/>max across chunks if windowed]
-    S --> GP{P ≥ 0.001 ?<br/>per-prompt threshold<br/>tuned on val.parquet}
-    GP -->|yes| BL[BLOCKED<br/>refusal returned]
+    M --> S[P injection]
+    S --> GP{P ≥ 0.001?}
+    GP -->|yes| BL[BLOCKED]
     GP -->|no| UP[upstream LLM]
-    S -.->|add to running sum| CT[Conversation cumulative<br/>Σ P across turns]
-    CT --> GC{Σ ≥ 1.5 ?<br/>conversation gate}
-    GC -->|yes| LK[Conversation LOCKED<br/>future turns refused<br/>until + New conversation]
-    GC -->|no| AC[Conversation active]
+    S -.->|append to last 30 turns| CT[Windowed cumulative]
+    CT --> GC{Σ ≥ 0.01?}
+    GC -->|yes| LK[Conversation LOCKED]
+    GC -->|no| AC[continue]
     style M fill:#0f9d58,stroke:#34a853,color:#fff
     style S fill:#0f9d58,stroke:#34a853,color:#fff
     style BL fill:#ea4335,stroke:#ea4335,color:#fff
@@ -114,30 +105,30 @@ flowchart TB
     style SHORT fill:#5f6368,stroke:#5f6368,color:#fff
 ```
 
-Three things in this diagram are non-obvious and worth calling out:
+Three non-obvious things:
 
-1. **Long prompts get sliding-window chunking, not truncation.** Llama-Prompt-Guard-2-86M has a 512-token context. A naive implementation truncates anything longer — letting an attacker hide an injection payload behind a long benign preamble. Instead we tokenize without truncation; if the prompt exceeds 512 tokens we slide a 512-token window with 64-token overlap, score every chunk, and take **max** P(injection). A payload anywhere in the prompt is still caught. The operator gets a log line stating window count + max score for forensics. Implementation: [`huggingface.py`](llm_firewall/classifiers/huggingface.py).
-2. **Threshold = 0.001, not the default 0.5.** Llama-Prompt-Guard-2's score distribution is **peaky** — most injection probability mass sits below 0.01 even for true positives. A 9-point threshold sweep on `val.parquet` placed F1-optimal at **0.001**, which we baked into [`registry.py`](llm_firewall/classifiers/registry.py). This single calibration moved DavidTKeane F1 from 0.485 → **0.824** and JailbreakBench from 0.448 → **0.723** without retraining. See [Performance](#performance) for the sweep curve.
-3. **The score feeds two independent gates.** The same `P(injection)` is consumed by (a) the per-prompt check, which decides this turn, and (b) the conversation cumulative, which decides whether the conversation continues. A subtle multi-turn jailbreak can pass (a) on every individual turn but still trip (b) when the cumulative crosses **1.5**. See [Conversation-aware blocking](#conversation-aware-blocking).
+1. **Long prompts are chunked, not truncated.** Llama-Prompt-Guard-2 has a 512-token context. Naive truncation lets an attacker hide an injection behind a long benign preamble — we slide a 512-token window with 64-token overlap and take the **max** P(injection) across chunks instead. Implementation: [`huggingface.py`](llm_firewall/classifiers/huggingface.py).
+2. **Threshold is `0.001`, not `0.5`.** The model's score distribution is peaky; injection probability sits below `0.01` even for true positives. A sweep on `val.parquet` placed F1-optimal at `0.001` — see the [threshold-tuning chart below](#performance).
+3. **The score feeds two gates.** Per-prompt threshold decides this turn; the windowed cumulative decides whether the conversation continues. Detail in [Conversation-aware blocking](#conversation-aware-blocking).
 
-Implementation: spec lives in [`registry.py`](llm_firewall/classifiers/registry.py), inference + chunking in [`huggingface.py`](llm_firewall/classifiers/huggingface.py), and the dual-gate orchestration in [`_processing.py`](llm_firewall/api/_processing.py).
-
-> **Note on the language router:** the system pipeline above shows a Language Router stage before the input classifier. Today it's largely vestigial — both `en` and `es` route to the same multilingual Llama-Prompt-Guard-2 spec, so the dispatch is effectively an identity function. It earns its place by (a) tagging every decision log with the detected language for telemetry/debugging and (b) leaving the plug-in point wired for any future language-specific specialist (e.g. a German-focused model). The previous SVM-era code actually had distinct English vs. Spanish models and the routing did real work; we left the wiring in place after the swap to keep that option open.
+The classifier is multilingual at runtime — every prompt in every supported language goes through the same path, no per-language dispatch.
 
 ---
 
 ## Conversation-aware blocking
 
-A per-prompt classifier catches obvious attacks. It misses **slow-burn jailbreaks** — five borderline-suspicious prompts in a row, each individually below threshold, that together steer the model into compromising itself.
+A per-prompt classifier catches obvious attacks. It misses **slow-burn jailbreaks** — borderline-suspicious prompts each individually below threshold that together steer the model into compromising itself.
 
-Our fix: a per-conversation **cumulative score gate**. Every prompt's `P(injection)` is summed across the conversation. When the total crosses `LLM_FIREWALL_CONVERSATION_CUMULATIVE_THRESHOLD` (default `1.5`), every subsequent prompt — even benign ones — is refused until the caller starts a new conversation.
+Our fix: a per-conversation **windowed cumulative gate**. Every prompt's `P(injection)` is summed over the most recent `LLM_FIREWALL_CONVERSATION_WINDOW_SIZE` turns (default `30`). When the windowed total crosses `LLM_FIREWALL_CONVERSATION_CUMULATIVE_THRESHOLD` (default `0.01`), the conversation is locked and every subsequent prompt — even benign ones — is refused until the caller starts a new conversation.
+
+The window matters: an all-time sum either fires too eagerly (low threshold) or never fires at all on long conversations (high threshold). A bounded window concentrates the signal on **recent** adversarial pattern. Once the gate trips it stays tripped — attackers cannot dilute their way out by appending benign turns; only `DELETE /v1/conversations/{id}` (the dashboard's **+ New conversation** button) resets the state.
 
 <p align="center">
   <img src="docs/img/screenshots/conversation_panel.png" alt="Conversation panel during a benign exchange" width="46%"/>
   <img src="docs/img/screenshots/conversation_blocked.png" alt="Conversation panel after the cumulative gate fires" width="46%"/>
 </p>
 
-*Left: two benign turns, cumulative bar at 0%. Right: three additional adversarial prompts push the cumulative to 2.4417 / 1.50 — the gate fires, the input is locked, and the only escape is the **+ New conversation** button.*
+*Left: a benign exchange with the cumulative bar near zero. Right: a sequence of adversarial prompts pushes the windowed cumulative over the threshold — the gate fires, the input is locked, and the only escape is the **+ New conversation** button.*
 
 The feature is exposed via the standard chat-completions endpoint:
 
@@ -165,13 +156,13 @@ State lives in process memory, capped at `LLM_FIREWALL_CONVERSATION_MAX_TRACKED`
 
 ## Live dashboard
 
-The dashboard at `/dashboard` is a single-page React-free UI showing prompt submission, conversation mode, runtime config, and a live decision feed. The hero image at the top of this README is one half of it; the other half is the decision log:
+The dashboard at `/dashboard` is a single-page React-free UI: a multi-turn conversation panel (with cumulative-score gauge and **+ New conversation** button), runtime config, and a live decision feed. The hero image at the top of this README shows the conversation panel in action; below it is the decision log:
 
 <p align="center">
   <img src="docs/img/screenshots/decision_log.png" alt="Decision log — every request with per-classifier scores and latency" width="900"/>
 </p>
 
-Each row carries: timestamp, decision, prompt, response, **per-classifier scores and latencies** (keyed `input:<name>` and `output:<name>`), conversation id, and the routing detail. The `Avg Classifier Latency` stat counts only the firewall's own work — not the upstream LLM round-trip — so you see how fast the screening is, not how slow your model provider is.
+Each row carries: timestamp, decision, prompt, response, **per-classifier scores and latencies** (keyed `input:<name>` and `output:<name>`), and the conversation id. The `Avg Classifier Latency` stat counts only the firewall's own work — not the upstream LLM round-trip — so you see how fast the screening is, not how slow your model provider is.
 
 The dashboard is push-driven via Server-Sent Events (`/api/stream`) — no polling, no idle traffic, surgical row prepends. Read-only JSON endpoints power everything:
 
@@ -313,7 +304,8 @@ The interesting knobs (full list in [`docs/input_classifier/`](docs/input_classi
 | Variable | Default | Purpose |
 |---|---|---|
 | `LLM_FIREWALL_UPSTREAM_CHAT_COMPLETIONS_URL` | OpenAI | Where the firewall forwards approved prompts |
-| `LLM_FIREWALL_CONVERSATION_CUMULATIVE_THRESHOLD` | `1.5` | Sum-of-scores threshold that gates a conversation |
+| `LLM_FIREWALL_CONVERSATION_CUMULATIVE_THRESHOLD` | `0.01` | Windowed sum threshold that gates a conversation |
+| `LLM_FIREWALL_CONVERSATION_WINDOW_SIZE` | `30` | Number of most-recent turns the cumulative reaches back over |
 | `LLM_FIREWALL_CONVERSATION_MAX_TRACKED` | `1000` | Soft cap on tracked conversations (LRU eviction) |
 | `LLM_FIREWALL_ENABLE_OUTPUT_CLASSIFIERS` | `true` | Skip output validation if you only want input filtering |
 | `LLM_FIREWALL_REFUSAL_MESSAGE` | `Sorry, I cannot answer this prompt` | Returned on any block |
@@ -328,7 +320,7 @@ All settings load from `.env` or the shell environment. See [`.env.example`](.en
 llm_firewall/
   api/           FastAPI app, routes, dashboard, conversations, dummy upstream
   core/          Settings + outbound HTTP proxy
-  classifiers/   Registry, ensemble, language router, HF + pickle backends
+  classifiers/   Registry, ensemble, HF + pickle backends
   filters/       FilterResult primitive + PII / toxicity filters
   validators/    Input / Output validator wrappers
 data/

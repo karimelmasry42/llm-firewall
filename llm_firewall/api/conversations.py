@@ -3,14 +3,17 @@ Conversational-awareness state for the firewall.
 
 A *conversation* is a sequence of user prompts the firewall sees that share
 a `conversation_id`. Each prompt produces a per-prompt P(injection) score
-from the input classifier; this module sums those scores across the whole
-conversation and surfaces a single block decision when the total crosses
+from the input classifier; this module sums those scores **over a sliding
+window of the most recent N turns** (`Settings.conversation_window_size`)
+and surfaces a single block decision when the windowed total crosses
 `Settings.conversation_cumulative_threshold`.
 
-This catches multi-turn social-engineering attacks where every individual
-prompt sits below the per-prompt threshold but the trajectory of the
-conversation is clearly adversarial — three or four borderline prompts in
-a row will trip the cumulative gate even if each would pass alone.
+The window matters: with all-time sum, every conversation eventually trips
+the gate regardless of intent and the threshold has no defensible meaning.
+With a fixed window, "the last 30 turns of suspicion" is a real signal that
+naturally bounds itself for benign chatter and concentrates on recent
+adversarial pattern. Once tripped, a conversation stays locked — attackers
+don't get to dilute their way out by appending benign turns.
 
 State lives in `app.state.conversations`. The store is in-memory and capped
 at `Settings.conversation_max_tracked` entries — oldest-touched
@@ -138,6 +141,10 @@ def list_summaries(app: FastAPI, limit: int = 50) -> list[dict[str, Any]]:
     return [c.to_summary() for c in reversed(items)]
 
 
+def _window_size(app: FastAPI) -> int:
+    return int(getattr(app.state.settings, "conversation_window_size", 30))
+
+
 def record_turn(
     app: FastAPI,
     conversation: Conversation,
@@ -146,33 +153,61 @@ def record_turn(
     score: float,
     decision: str,
 ) -> None:
-    """Append a turn and update the conversation's cumulative score."""
-    conversation.cumulative_score += float(score)
+    """Append a turn and update the conversation's windowed cumulative.
+
+    `cumulative_score` is the sum of `score` across the last
+    `Settings.conversation_window_size` turns (inclusive of this one), not
+    the all-time sum. The "blocked" flag is sticky — once tripped, it stays
+    set even if the windowed sum later drops back below the threshold,
+    so attackers cannot recover the conversation by appending benign turns.
+    """
+    new_turn = ConversationTurn(
+        timestamp=time.time(),
+        # Truncate long prompts to keep memory bounded; the firewall
+        # log already keeps a fuller copy under decision_log.
+        prompt=prompt[:500],
+        score=float(score),
+        decision=decision,
+        cumulative_score_after=0.0,  # back-filled below once we know the window sum
+    )
+    conversation.turns.append(new_turn)
+
+    window = _window_size(app)
+    recent = conversation.turns[-window:] if window > 0 else conversation.turns
+    conversation.cumulative_score = sum(t.score for t in recent)
+    new_turn.cumulative_score_after = conversation.cumulative_score
+
     threshold = float(
-        getattr(app.state.settings, "conversation_cumulative_threshold", 1.5)
+        getattr(app.state.settings, "conversation_cumulative_threshold", 0.01)
     )
     if conversation.cumulative_score >= threshold and not conversation.blocked:
         conversation.blocked = True
         conversation.blocked_reason = (
-            f"cumulative score {conversation.cumulative_score:.4f} ≥ threshold "
-            f"{threshold:.4f} after {len(conversation.turns) + 1} turn(s)"
+            f"windowed cumulative score {conversation.cumulative_score:.4f} ≥ "
+            f"threshold {threshold:.4f} over the last {len(recent)} turn(s)"
         )
-    conversation.turns.append(
-        ConversationTurn(
-            timestamp=time.time(),
-            # Truncate long prompts to keep memory bounded; the firewall
-            # log already keeps a fuller copy under decision_log.
-            prompt=prompt[:500],
-            score=float(score),
-            decision=decision,
-            cumulative_score_after=conversation.cumulative_score,
-        )
-    )
 
 
 def is_blocked_by_cumulative(conversation: Conversation) -> bool:
     """Has this conversation tripped the cumulative-score gate?"""
     return conversation.blocked
+
+
+def predict_windowed_cumulative(
+    app: FastAPI, conversation: Conversation, pending_score: float
+) -> float:
+    """Return the cumulative windowed sum *if* `pending_score` were appended.
+
+    Used by the request handler to refuse a turn before mutating any
+    state — `record_turn` is only called after the per-prompt and
+    cumulative gates have decided this prompt's outcome.
+    """
+    window = _window_size(app)
+    # The new turn occupies one slot of the window, so look back at most
+    # window-1 existing turns.
+    keep = max(0, window - 1)
+    recent = conversation.turns[-keep:] if keep > 0 else []
+    return sum(t.score for t in recent) + float(pending_score)
 
 
 def extract_conversation_id(body: dict) -> str | None:
