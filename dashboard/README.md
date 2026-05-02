@@ -4,15 +4,19 @@ Single-page monitoring UI served by the firewall at `GET /dashboard`.
 
 ## What it shows
 
-- A prompt submission form that calls `POST /v1/chat/completions` and renders the
-  upstream response (or refusal message).
-- The currently configured upstream URL and the registered input/output classifiers
-  (sourced from `GET /api/config`).
-- A live decision log polled from `GET /api/logs` (capped at the most recent 500
-  entries — the limit is enforced server-side in
-  [`llm_firewall/api/_processing.py`](../llm_firewall/api/_processing.py)).
-- Aggregate counts (`allowed` / `blocked` / `dropped` / `errors`) and average
-  end-to-end latency from `GET /api/stats`.
+- A multi-turn **conversation panel** that calls `POST /v1/chat/completions` with a
+  per-conversation `conversation_id`, renders each turn inline, and tracks the
+  running cumulative `P(injection)` against the configured threshold via a gauge.
+  Pressing **+ New conversation** issues `DELETE /v1/conversations/{id}` and
+  starts fresh.
+- The currently configured upstream URL and the registered input/output
+  classifiers (from `GET /api/config`).
+- A live decision log driven by Server-Sent Events (`GET /api/stream`) — no
+  polling. The server emits a `snapshot` event on connect and a `decision`
+  event whenever a new entry is logged, each carrying authoritative aggregate
+  stats so the UI never has to reconcile counts locally.
+- Aggregate counts (`allowed` / `blocked` / `dropped` / `errors`) and the average
+  classifier-only latency.
 
 ## Files
 

@@ -3,35 +3,23 @@ Dashboard, decision-log, stats, config, and health routes.
 """
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
+from typing import AsyncIterator
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 
 from llm_firewall.api._processing import MAX_LOG_SIZE, list_classifier_names
+from llm_firewall.api._stats import compute_stats
+from llm_firewall.api.events import get_broadcaster
 
 DASHBOARD_HTML_PATH = (
     Path(__file__).resolve().parents[2] / "dashboard" / "index.html"
 )
 
 router = APIRouter()
-
-
-def _iter_total_latency_values(log: list[dict]) -> list[float]:
-    """Extract valid per-request total latency values from the decision log."""
-    return [
-        float(entry["total_latency_ms"])
-        for entry in log
-        if isinstance(entry.get("total_latency_ms"), (int, float))
-    ]
-
-
-def _compute_average_total_latency_ms(log: list[dict]) -> float:
-    """Compute the mean end-to-end latency across the current in-memory log."""
-    latencies = _iter_total_latency_values(log)
-    if not latencies:
-        return 0.0
-    return round(sum(latencies) / len(latencies), 3)
 
 
 @router.get("/api/logs")
@@ -48,15 +36,7 @@ async def get_logs(request: Request, limit: int = 50):
 @router.get("/api/stats")
 async def get_stats(request: Request):
     """Return aggregate stats for the dashboard."""
-    log = request.app.state.decision_log
-    return {
-        "total": len(log),
-        "blocked": sum(1 for entry in log if entry["decision"] == "BLOCKED"),
-        "dropped": sum(1 for entry in log if entry["decision"] == "DROPPED"),
-        "allowed": sum(1 for entry in log if entry["decision"] == "ALLOWED"),
-        "errors": sum(1 for entry in log if entry["decision"] == "ERROR"),
-        "average_total_latency_ms": _compute_average_total_latency_ms(log),
-    }
+    return compute_stats(request.app.state.decision_log)
 
 
 @router.get("/api/config")
@@ -70,7 +50,75 @@ async def get_config(request: Request):
         "output_models": list_classifier_names(state.output_classifier_specs),
         "enable_output_classifiers": state.settings.enable_output_classifiers,
         "refusal_message": state.settings.refusal_message,
+        "conversation_cumulative_threshold": state.settings.conversation_cumulative_threshold,
+        "conversation_max_tracked": state.settings.conversation_max_tracked,
     }
+
+
+def _sse(event_name: str, payload: dict | str) -> bytes:
+    """Encode one Server-Sent Event frame."""
+    body = payload if isinstance(payload, str) else json.dumps(payload, default=str)
+    return f"event: {event_name}\ndata: {body}\n\n".encode("utf-8")
+
+
+@router.get("/api/stream")
+async def stream(request: Request):
+    """Push decision-log updates to the dashboard over Server-Sent Events.
+
+    On connect: emit one `snapshot` event carrying the current logs (up to
+    100) plus stats so a fresh tab paints immediately. After that, only push
+    a `decision` event when `log_decision` actually appends a new entry —
+    no polling, no idle traffic. A 25-second `heartbeat` keeps the
+    connection alive through proxies that close idle TCP.
+
+    The decision log itself remains the source of truth at
+    `app.state.decision_log`, exposed via `/api/logs` for clients that need
+    to re-snapshot after a network blip.
+    """
+    broadcaster = get_broadcaster(request.app)
+    queue = broadcaster.subscribe()
+
+    async def event_generator() -> AsyncIterator[bytes]:
+        try:
+            # Snapshot first so the dashboard can render before any new
+            # decision arrives. Re-using the same shape as /api/logs +
+            # /api/stats keeps the client code simple.
+            full_log = request.app.state.decision_log
+            # Cap the rendered list (fresh tabs need bounded HTML), but
+            # always compute stats from the full log so totals reconcile
+            # with the per-decision counts.
+            snapshot = {
+                "logs": list(full_log[:100]),
+                "stats": compute_stats(full_log),
+            }
+            yield _sse("snapshot", snapshot)
+
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    event = await asyncio.wait_for(queue.get(), timeout=25.0)
+                except asyncio.TimeoutError:
+                    yield _sse("heartbeat", {})
+                    continue
+                yield _sse("decision", event)
+        except (asyncio.CancelledError, ConnectionError, GeneratorExit):
+            # Client closed the SSE stream mid-iteration. Without this
+            # except, an orphan subscriber lives until the next heartbeat
+            # boundary (up to 25s). The `finally` below still runs, so
+            # the queue is unsubscribed promptly.
+            pass
+        finally:
+            broadcaster.unsubscribe(queue)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",  # disable nginx-style buffering if proxied
+        },
+    )
 
 
 @router.get("/dashboard", response_class=HTMLResponse)

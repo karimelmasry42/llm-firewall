@@ -6,26 +6,44 @@ preloaded validators, decision log) and registers the route modules.
 """
 from __future__ import annotations
 
+import logging
+
 from fastapi import FastAPI
 
 from llm_firewall.api import dashboard as dashboard_routes
 from llm_firewall.api import routes as chat_routes
-from llm_firewall.api._processing import (
-    flatten_classifier_specs,
-    preload_validators,
-)
+from llm_firewall.api._processing import preload_validators
 from llm_firewall.classifiers.registry import (
     ClassifierSpec,
-    get_input_classifier_specs_by_language,
+    get_input_classifier_specs,
     get_output_classifier_specs,
 )
 from llm_firewall.core.config import Settings
 
 
+# Endpoints the dashboard hits often (or holds open). Keeping them out of
+# the access log makes the console useful again — actual chat-completion
+# requests still log normally.
+_QUIET_ACCESS_PATHS = ("/api/stream", "/api/logs", "/api/stats", "/api/config", "/health")
+
+
+class _QuietAccessLogFilter(logging.Filter):
+    """Drop uvicorn access-log records for noisy dashboard endpoints."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return not any(path in msg for path in _QUIET_ACCESS_PATHS)
+
+
+# Install once at import time. uvicorn re-installs its access logger on
+# every run, so attaching the filter to the named logger is enough — both
+# `make run` (uvicorn entry-point) and `pytest` (TestClient) honor it.
+logging.getLogger("uvicorn.access").addFilter(_QuietAccessLogFilter())
+
+
 def create_app(
     settings: Settings | None = None,
     input_classifier_specs: list[ClassifierSpec] | None = None,
-    input_classifier_specs_by_language: dict[str, list[ClassifierSpec]] | None = None,
     output_classifier_specs: list[ClassifierSpec] | None = None,
 ) -> FastAPI:
     """Create the FastAPI app with lazy-loaded validators."""
@@ -37,23 +55,11 @@ def create_app(
 
     app.state.settings = settings or Settings()
     app.state.decision_log = []
-
-    routed_input_specs = (
-        {
-            language: list(specs)
-            for language, specs in input_classifier_specs_by_language.items()
-        }
-        if input_classifier_specs_by_language is not None
-        else (
-            {"en": list(input_classifier_specs)}
-            if input_classifier_specs is not None
-            else get_input_classifier_specs_by_language()
-        )
-    )
-    app.state.input_validators = {}
+    app.state.input_validator = None
     app.state.output_validator = None
-    app.state.input_classifier_specs_by_language = routed_input_specs
-    app.state.input_classifier_specs = flatten_classifier_specs(routed_input_specs)
+    app.state.input_classifier_specs = list(
+        input_classifier_specs or get_input_classifier_specs()
+    )
     app.state.output_classifier_specs = list(
         output_classifier_specs or get_output_classifier_specs()
     )

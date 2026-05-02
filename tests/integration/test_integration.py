@@ -11,20 +11,18 @@ class TestIntegration:
     def test_app_preloads_validators(
         self,
         firewall_settings,
-        input_classifier_specs_by_language,
+        input_classifier_specs,
         output_classifier_specs,
     ):
         from llm_firewall.api.app import create_app
 
         app = create_app(
             settings=firewall_settings,
-            input_classifier_specs_by_language=input_classifier_specs_by_language,
+            input_classifier_specs=input_classifier_specs,
             output_classifier_specs=output_classifier_specs,
         )
 
-        assert app.state.input_validators
-        assert "en" in app.state.input_validators
-        assert "es" in app.state.input_validators
+        assert app.state.input_validator is not None
         assert app.state.output_validator is not None
 
     def test_malicious_prompt_returns_refusal(self, client, malicious_openai_request):
@@ -210,6 +208,9 @@ class TestIntegration:
                 upstream_chat_completions_url="https://llm.example.test/v1/chat/completions",
                 upstream_api_key="server-side-key",
                 refusal_message="Sorry, I cannot answer this prompt",
+                # Test fakes score higher than production model; lift the gate
+                # threshold so the round-trip isn't blocked on turn 1.
+                conversation_cumulative_threshold=1.5,
             ),
             input_classifier_specs=input_classifier_specs,
             output_classifier_specs=output_classifier_specs,
@@ -291,7 +292,6 @@ class TestIntegration:
         assert "total_latency_ms" in log_entry
         assert log_entry["latencies_ms"]["input:policy_bypass_guard"] >= 0
         assert log_entry["latencies_ms"]["input:prompt_injection_guard"] >= 0
-        assert log_entry["latencies_ms"]["input:Language Router"] >= 0
         assert log_entry["latencies_ms"]["output:isolated_nsfw_guardrail"] >= 0
         assert log_entry["latencies_ms"]["output:toxicity_guard"] >= 0
         assert log_entry["total_latency_ms"] >= 0
@@ -306,7 +306,6 @@ class TestIntegration:
         assert data["enable_output_classifiers"] is True
         assert data["refusal_message"] == "Sorry, I cannot answer this prompt"
         assert "prompt_injection_guard" in data["input_models"]
-        assert "spanish_prompt_guard" in data["input_models"]
         assert "isolated_nsfw_guardrail" in data["output_models"]
 
     @respx.mock
@@ -326,6 +325,9 @@ class TestIntegration:
                 upstream_api_key="server-side-key",
                 enable_output_classifiers=False,
                 refusal_message="Sorry, I cannot answer this prompt",
+                # Test fakes score higher than production model; lift the gate
+                # threshold so the round-trip isn't blocked on turn 1.
+                conversation_cumulative_threshold=1.5,
             ),
             input_classifier_specs=input_classifier_specs,
             output_classifier_specs=output_classifier_specs,
@@ -353,43 +355,15 @@ class TestIntegration:
         assert config_response.status_code == 200
         assert config_response.json()["enable_output_classifiers"] is False
 
-    @respx.mock
-    def test_spanish_prompt_routes_to_spanish_input_filter(
-        self,
-        client,
-        firewall_settings,
-        sample_openai_response,
-    ):
-        route = respx.post(firewall_settings.upstream_chat_completions_url).mock(
-            return_value=httpx.Response(200, json=sample_openai_response)
-        )
-
-        response = client.post(
-            "/v1/chat/completions",
-            json={
-                "model": "firewall-demo",
-                "messages": [{"role": "user", "content": "Hola necesito ayuda con mi cuenta"}],
-            },
-        )
-
-        assert response.status_code == 200
-        assert response.json()["choices"][0]["message"]["content"] == "The capital of France is Paris."
-        assert len(route.calls) == 1
-
-        log_entry = client.get("/api/logs").json()[0]
-        assert "Input language router: es" in log_entry["detail"]
-        assert "spanish_prompt_guard" in log_entry["detail"]
-        assert "input:spanish_prompt_guard" in log_entry["latencies_ms"]
-
     def test_dashboard_page(self, client):
         response = client.get("/dashboard")
         assert response.status_code == 200
-        assert "Prompt Router" in response.text
+        assert "Conversation Mode" in response.text
 
     def test_input_model_load_error_returns_structured_json(self, client, monkeypatch):
         from llm_firewall.api import _processing
 
-        def raise_model_error(_app, _language="en"):
+        def raise_model_error(_app):
             raise ValueError("broken input classifier")
 
         monkeypatch.setattr(_processing, "get_input_validator", raise_model_error)
@@ -469,3 +443,22 @@ class TestIntegration:
 
         assert response.status_code == 400
         assert "1000 prompts" in response.json()["error"]["message"]
+
+    def test_empty_messages_does_not_allocate_conversation(self, client, test_app):
+        # Repeated empty-prompt POSTs must not churn the conversation LRU.
+        # Reject before allocating any conversation state.
+        for _ in range(5):
+            response = client.post(
+                "/v1/chat/completions",
+                json={"model": "firewall-demo", "messages": []},
+            )
+            assert response.status_code == 400
+            assert response.json()["error"]["message"] == (
+                "No user message found in request."
+            )
+
+        store = getattr(test_app.state, "conversations", None)
+        assert store is None or len(store) == 0, (
+            "empty-message requests must not allocate conversation state; "
+            f"store contains {dict(store) if store else store}"
+        )

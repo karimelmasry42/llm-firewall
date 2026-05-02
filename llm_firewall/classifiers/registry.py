@@ -100,35 +100,31 @@ class ClassifierSpec:
 # specs (`linear_svm_input_classifier.pkl`, `linear_svm_spanish.pkl`) which
 # operated on regex tag-substituted text and had no semantic understanding.
 # See docs/input_classifier/ for the dataset/eval/model bake-off that
-# justified this choice. To swap models (e.g. once
-# meta-llama/Llama-Prompt-Guard-2-86M is approved + authenticated), replace the
-# spec below — the runtime is generic.
+# justified this choice.
+#
+# Threshold tuning: Meta's Llama-Prompt-Guard-2-86M is well-calibrated
+# but its score distribution is *peaky* — the bulk of injection
+# probability mass sits below 0.01 even for true positives. The default
+# 0.5 threshold yields recall=0.32 on the multilingual DavidTKeane held-out;
+# a sweep over val.parquet pushed the F1-optimal threshold down to ~0.001,
+# which lifts DavidTKeane F1 from 0.485 → 0.824 and JailbreakBench F1
+# from 0.448 → 0.723 (see docs/input_classifier/models.md). The runtime is
+# generic; swapping models is a model_id + injection_label_* change.
 INPUT_CLASSIFIER_SPECS = [
     ClassifierSpec(
-        name="protectai_deberta_v3_prompt_injection_v2",
-        display_name="protectai/deberta-v3-base-prompt-injection-v2",
+        name="llama_prompt_guard_2_86m",
+        display_name="Llama-Prompt-Guard-2-86M",
         backend="huggingface_sequence",
-        model_id="protectai/deberta-v3-base-prompt-injection-v2",
+        model_id="meta-llama/Llama-Prompt-Guard-2-86M",
         preprocess=normalize_whitespace,
-        injection_label_name="INJECTION",
-        threshold=0.5,
+        # Meta's id2label uses {0: "LABEL_0", 1: "LABEL_1"}; index 1 is
+        # "INJECTION" per the model card.
+        injection_label_id=1,
+        # Tuned on val.parquet — see docstring above.
+        threshold=0.001,
         max_length=512,
     ),
 ]
-
-
-# A single multilingual classifier handles every language. The dict still
-# enumerates `en` and `es` because the API preloads validators by iterating
-# over its keys (see `_processing.preload_validators`) — keeping both keys
-# preserves the per-language validator preload behavior. For any other
-# language code, callers should go through
-# `get_input_classifier_specs_for_language()` (or rely on the API's
-# `_resolve_input_route_language` fallback) which returns the same specs
-# rather than an empty list.
-INPUT_CLASSIFIER_SPECS_BY_LANGUAGE = {
-    "en": list(INPUT_CLASSIFIER_SPECS),
-    "es": list(INPUT_CLASSIFIER_SPECS),
-}
 
 
 OUTPUT_CLASSIFIER_SPECS = [
@@ -146,31 +142,6 @@ OUTPUT_CLASSIFIER_SPECS = [
 
 def get_input_classifier_specs() -> list[ClassifierSpec]:
     """Return the hard-coded input classifier registry."""
-    return list(INPUT_CLASSIFIER_SPECS)
-
-
-def get_input_classifier_specs_by_language() -> dict[str, list[ClassifierSpec]]:
-    """Return the hard-coded input classifiers grouped by routed language."""
-    return {
-        language: list(specs)
-        for language, specs in INPUT_CLASSIFIER_SPECS_BY_LANGUAGE.items()
-    }
-
-
-def get_input_classifier_specs_for_language(language: str) -> list[ClassifierSpec]:
-    """Return input classifier specs for any language code, with fallback.
-
-    The runtime classifier is multilingual, so unknown language codes (e.g.
-    `fr`, `zh`, `pt-BR`) get the same specs as English. Production callers
-    going through the API already get fallback behavior at the route layer
-    (`_resolve_input_route_language`); this helper is the single-call
-    equivalent for tests and for any future caller that needs specs by
-    language without round-tripping through `app.state`.
-    """
-    specs = INPUT_CLASSIFIER_SPECS_BY_LANGUAGE.get(language)
-    if specs is not None:
-        return list(specs)
-    # Unknown language: fall back to the canonical (multilingual) specs.
     return list(INPUT_CLASSIFIER_SPECS)
 
 

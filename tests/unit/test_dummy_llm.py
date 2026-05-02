@@ -19,7 +19,10 @@ class TestDummyLLM:
 
         assert response.status_code == 200
         data = response.json()
-        assert data["choices"][0]["message"]["content"] == "This is a dummy response."
+        # The default response is the canned text from DummyLLMSettings —
+        # don't pin the exact wording, just verify it's the configured
+        # default, so updating the default doesn't churn this test.
+        assert data["choices"][0]["message"]["content"] == DummyLLMSettings().response_text
         assert data["model"] == "dummy-llm"
 
     def test_rejects_missing_api_key_when_auth_is_enabled(self):
@@ -47,7 +50,7 @@ class TestDummyLLM:
         )
 
         assert response.status_code == 200
-        assert response.json()["choices"][0]["message"]["content"] == "This is a dummy response."
+        assert response.json()["choices"][0]["message"]["content"] == DummyLLMSettings().response_text
 
     def test_uses_configured_response_text(self):
         client = TestClient(
