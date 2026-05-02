@@ -233,47 +233,195 @@ def fig_per_source_perf() -> None:
     plt.close(fig)
 
 
+# Map DavidTKeane's verbose `lang` strings to short codes used in the chart.
+_LANG_NORMALIZE = {
+    "English": "en",
+    "Spanish": "es",
+    "German": "de",
+    "French": "fr",
+    "French (embedded in English)": "fr",
+    "Chinese (Mandarin)": "zh",
+    "Japanese": "ja",
+    "English (translation vector)": "en",
+}
+
+
+def _load_davidtkeane_scores():
+    """Read the per-prompt scores dumped by `evaluate.py` for the shipped
+    classifier on the DavidTKeane benchmark. Returns None when the file
+    is missing (lets `generate_visualizations.py` still run on a fresh
+    checkout that hasn't re-evaluated yet)."""
+    try:
+        import pandas as pd
+    except ImportError:
+        return None
+    path = EVAL_DIR / "prompt_guard_2_scores.parquet"
+    if not path.exists():
+        return None
+    df = pd.read_parquet(path)
+    df = df[df["table"] == "held_out_davidtkeane"].copy()
+    df["lang_norm"] = df["lang"].map(_LANG_NORMALIZE).fillna(df["lang"])
+    return df
+
+
 def fig_multilingual_blocking() -> None:
-    """Visual proof of multilingual blocking — synthetic but real numbers."""
-    # Numbers from the live smoke test in the commit message.
-    examples = [
-        ("English (benign)", 0.0004, "PASS"),
-        ("English (injection)", 0.9994, "BLOCK"),
-        ("Spanish (injection)", 0.9994, "BLOCK"),
-        ("German (injection)", 0.9993, "BLOCK"),
-        ("Chinese (injection)", 0.9996, "BLOCK"),
-    ]
+    """Per-language P(injection) distribution on the DavidTKeane benchmark.
 
-    labels = [e[0] for e in examples]
-    scores = [e[1] for e in examples]
-    decisions = [e[2] for e in examples]
-    colors = ["#34a853" if d == "PASS" else "#ea4335" for d in decisions]
+    Reads the per-prompt scores `evaluate.py` dumps alongside its JSON
+    report — these are real numbers from the shipped, threshold-tuned
+    Llama-Prompt-Guard-2-86M run against actual multilingual prompts.
+    Each dot is one prompt; sample sizes (which are tiny outside English)
+    are visible by eye instead of hidden behind an aggregate bar.
+    """
+    df = _load_davidtkeane_scores()
+    if df is None:
+        # Fallback: skip silently rather than committing a fake chart.
+        # Re-running `evaluate.py --classifier prompt_guard_2` regenerates
+        # the parquet and unblocks this figure.
+        print("  (skipped multilingual_blocking — no per-prompt scores parquet)")
+        return
 
-    fig, ax = plt.subplots(figsize=(10, 4.5), dpi=120)
+    # Group order: benign English on the left, then injection by language
+    # in descending sample size so the eye lands on English first.
+    groups = []
+    en_benign = df[(df.lang_norm == "en") & (df.label == 0)]
+    if len(en_benign):
+        groups.append(("en (benign)", en_benign, "#34a853"))
+    inj = df[df.label == 1]
+    by_lang = sorted(
+        inj.groupby("lang_norm"),
+        key=lambda kv: (-len(kv[1]), kv[0]),
+    )
+    for lang, sub in by_lang:
+        groups.append((f"{lang} (injection)", sub, "#ea4335"))
+
+    fig, ax = plt.subplots(figsize=(11, 5.5), dpi=120)
     fig.patch.set_facecolor(COLOR_BG)
     ax.set_facecolor(COLOR_BG)
 
-    bars = ax.barh(labels, scores, color=colors, edgecolor="white")
-    for bar, score, decision in zip(bars, scores, decisions):
+    rng = np.random.default_rng(seed=0)  # deterministic jitter
+    threshold = 0.001
+    floor = 1e-5  # so true 0.0 scores still plot on a log axis
+
+    xticks, xticklabels = [], []
+    for i, (label, sub, color) in enumerate(groups):
+        scores = np.clip(sub["score"].to_numpy(dtype=float), floor, 1.0)
+        x = i + rng.uniform(-0.18, 0.18, size=len(scores))
+        ax.scatter(
+            x, scores, s=42, alpha=0.75, color=color, edgecolor="white",
+            linewidth=0.6, zorder=3,
+        )
+        xticks.append(i)
+        xticklabels.append(f"{label}\n(n={len(scores)})")
+
+    ax.axhline(threshold, color="#fbbc04", linestyle="--", linewidth=1.4,
+               label=f"decision threshold = {threshold}", zorder=2)
+    ax.set_yscale("log")
+    ax.set_ylim(floor / 2, 2.0)
+    ax.set_xticks(xticks, xticklabels, fontsize=9)
+    ax.set_ylabel("P(injection) — log scale", fontsize=11)
+    ax.set_title(
+        "Live classifier scores on the DavidTKeane multilingual benchmark "
+        "(threshold-tuned Llama-Prompt-Guard-2-86M)",
+        fontsize=12, color="#202124", pad=14,
+    )
+    # Subtitle clarifies what every dot is and which side of the line wins.
+    ax.text(
+        0.5, 1.005,
+        "Each dot is one real prompt. Above the dashed line ⇒ blocked. "
+        "Same model, same threshold, all languages.",
+        transform=ax.transAxes, ha="center", va="bottom",
+        fontsize=9, color="#5f6368",
+    )
+    ax.legend(loc="center right", fontsize=10, frameon=False)
+    plt.tight_layout()
+    plt.savefig(IMG_DIR / "multilingual_blocking.png", dpi=120, bbox_inches="tight")
+    plt.close(fig)
+
+
+def fig_multilingual_examples() -> None:
+    """Companion figure: a handful of real non-English DavidTKeane prompts
+    with the actual score the shipped classifier returned, including a
+    deliberate false negative so the chart isn't only a victory lap."""
+    df = _load_davidtkeane_scores()
+    if df is None:
+        print("  (skipped multilingual_examples — no per-prompt scores parquet)")
+        return
+
+    inj = df[(df.label == 1) & (df.lang_norm.isin({"es", "de", "zh", "ja", "fr"}))]
+    if inj.empty:
+        return
+
+    # One worst-FN (lowest score) and one best-TP (highest score) per
+    # language, capped to keep the chart readable.
+    picks: list[tuple[str, str, str, float]] = []
+    for lang in ["es", "de", "zh", "ja", "fr"]:
+        sub = inj[inj.lang_norm == lang].sort_values("score")
+        if sub.empty:
+            continue
+        # If the language has both a low and a high score, show both.
+        # Otherwise just show what we have (most languages have only 1–2 prompts).
+        if len(sub) >= 2 and sub["score"].iloc[0] < 0.01 < sub["score"].iloc[-1]:
+            picks.append((lang, sub["text"].iloc[0], "MISS", float(sub["score"].iloc[0])))
+            picks.append((lang, sub["text"].iloc[-1], "BLOCK", float(sub["score"].iloc[-1])))
+        else:
+            top = sub.iloc[-1]
+            verdict = "BLOCK" if top["score"] > 0.001 else "MISS"
+            picks.append((lang, top["text"], verdict, float(top["score"])))
+
+    # Real prompts contain CJK / Hiragana glyphs; widen the font fallback
+    # chain on this figure only so they render instead of becoming tofu.
+    # We restore rcParams in a `finally` block to keep other figures
+    # byte-identical when this script is re-run.
+    prev_sans = list(plt.rcParams["font.sans-serif"])
+    plt.rcParams["font.sans-serif"] = [
+        "Arial Unicode MS", "Hiragino Sans", "Apple SD Gothic Neo",
+        "Noto Sans CJK JP", "Noto Sans CJK SC", *prev_sans,
+    ]
+
+    fig, ax = plt.subplots(figsize=(11, 0.55 * len(picks) + 1.5), dpi=120)
+    fig.patch.set_facecolor(COLOR_BG)
+    ax.set_facecolor(COLOR_BG)
+
+    labels = [
+        f"{lang}  ·  “{(text[:55] + '…') if len(text) > 56 else text}”"
+        for lang, text, _, _ in picks
+    ]
+    scores = [s for _, _, _, s in picks]
+    decisions = [d for _, _, d, _ in picks]
+    # BLOCK = red (caught the injection); MISS = grey (false negative,
+    # got through unflagged). Using green for MISS would misleadingly
+    # imply success — these are *true* injection prompts that scored
+    # below the threshold.
+    colors = ["#9aa0a6" if d == "MISS" else "#ea4335" for d in decisions]
+
+    y = np.arange(len(picks))
+    ax.barh(y, scores, color=colors, edgecolor="white", height=0.65)
+    for i, (score, decision) in enumerate(zip(scores, decisions)):
         ax.annotate(
             f"  {score:.4f}  →  {decision}",
-            xy=(score, bar.get_y() + bar.get_height() / 2),
+            xy=(min(score, 1.0), i),
             xytext=(4, 0), textcoords="offset points",
-            va="center", fontsize=10, color="#3c4043",
+            va="center", fontsize=9, color="#3c4043",
         )
 
     ax.axvline(0.001, color="#fbbc04", linestyle="--", linewidth=1.2,
                label="decision threshold = 0.001")
-    ax.set_xlim(0, 1.18)
-    ax.set_xlabel("P(injection) from Llama-Prompt-Guard-2-86M", fontsize=11)
+    ax.set_yticks(y, labels, fontsize=9)
+    ax.invert_yaxis()  # first language at the top
+    ax.set_xlim(0, 1.25)
+    ax.set_xlabel("P(injection) from Llama-Prompt-Guard-2-86M (live)", fontsize=10)
     ax.set_title(
-        "Live multilingual blocking — same model handles English, Spanish, German, Chinese",
-        fontsize=12, color="#202124", pad=14,
+        "Real DavidTKeane prompts with the score the shipped classifier returned",
+        fontsize=12, color="#202124", pad=12,
     )
-    ax.legend(loc="lower right", fontsize=10, frameon=False)
-    plt.tight_layout()
-    plt.savefig(IMG_DIR / "multilingual_blocking.png", dpi=120, bbox_inches="tight")
-    plt.close(fig)
+    ax.legend(loc="lower right", fontsize=9, frameon=False)
+    try:
+        plt.tight_layout()
+        plt.savefig(IMG_DIR / "multilingual_examples.png", dpi=120, bbox_inches="tight")
+    finally:
+        plt.close(fig)
+        plt.rcParams["font.sans-serif"] = prev_sans
 
 
 def fig_dataset_composition() -> None:
@@ -363,6 +511,8 @@ def main() -> None:
     print("  ✓ docs/img/per_source_performance.png")
     fig_multilingual_blocking()
     print("  ✓ docs/img/multilingual_blocking.png")
+    fig_multilingual_examples()
+    print("  ✓ docs/img/multilingual_examples.png")
     fig_dataset_composition()
     print("  ✓ docs/img/dataset_composition.png")
     fig_language_coverage()

@@ -266,8 +266,15 @@ class TableMetrics:
 
 
 def _evaluate_parquet(
-    classifier: ClassifierLike, parquet: Path, limit: int | None
+    classifier: ClassifierLike,
+    parquet: Path,
+    limit: int | None,
+    score_rows: list[dict] | None = None,
+    score_table_name: str | None = None,
 ) -> TableMetrics:
+    """Score every row of a parquet table; optionally append per-prompt
+    rows to `score_rows` so callers can dump them to CSV for downstream
+    visualization without re-running the classifier."""
     import pyarrow.parquet as pq
 
     table = pq.read_table(parquet).to_pylist()
@@ -295,6 +302,18 @@ def _evaluate_parquet(
         metrics.update(y_true, y_pred, score, latency_ms)
         metrics.by_source[source].update(y_true, y_pred, score, latency_ms)
         metrics.by_lang[lang].update(y_true, y_pred, score, latency_ms)
+
+        if score_rows is not None:
+            score_rows.append({
+                "table": score_table_name or parquet.stem,
+                "text": text,
+                "lang": lang,
+                "source": source,
+                "label": y_true,
+                "predicted": y_pred,
+                "score": float(score),
+                "latency_ms": round(latency_ms, 3),
+            })
 
     metrics.by_source = dict(metrics.by_source)
     metrics.by_lang = dict(metrics.by_lang)
@@ -341,12 +360,16 @@ def main() -> int:
         "held_out_jailbreakbench": DATASETS_DIR / "eval_jailbreakbench.parquet",
     }
 
+    score_rows: list[dict] = []
     for table_name, path in parquets.items():
         if not path.exists():
             logger.warning("missing %s; skipping", path)
             continue
         logger.info("evaluating %s on %s", args.classifier, path.name)
-        metrics = _evaluate_parquet(classifier, path, args.limit)
+        metrics = _evaluate_parquet(
+            classifier, path, args.limit,
+            score_rows=score_rows, score_table_name=table_name,
+        )
         report["tables"][table_name] = metrics.to_dict()
         logger.info(
             "  %s: n=%d f1=%.3f mean=%.1fms p95=%.1fms",
@@ -361,6 +384,16 @@ def main() -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(report, indent=2, sort_keys=True))
     logger.info("wrote %s", out_path)
+
+    # Dump per-prompt scores so visualizations (e.g. the multilingual
+    # blocking strip plot) can read real numbers without re-running the
+    # classifier. Parquet keeps the file small and types intact.
+    if score_rows:
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        scores_path = out_path.with_name(out_path.stem + "_scores.parquet")
+        pq.write_table(pa.Table.from_pylist(score_rows), scores_path)
+        logger.info("wrote %s (%d rows)", scores_path, len(score_rows))
     return 0
 
 
