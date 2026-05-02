@@ -469,3 +469,22 @@ class TestIntegration:
 
         assert response.status_code == 400
         assert "1000 prompts" in response.json()["error"]["message"]
+
+    def test_empty_messages_does_not_allocate_conversation(self, client, test_app):
+        # Repeated empty-prompt POSTs must not churn the conversation LRU.
+        # Reject before allocating any conversation state.
+        for _ in range(5):
+            response = client.post(
+                "/v1/chat/completions",
+                json={"model": "firewall-demo", "messages": []},
+            )
+            assert response.status_code == 400
+            assert response.json()["error"]["message"] == (
+                "No user message found in request."
+            )
+
+        store = getattr(test_app.state, "conversations", None)
+        assert store is None or len(store) == 0, (
+            "empty-message requests must not allocate conversation state; "
+            f"store contains {dict(store) if store else store}"
+        )

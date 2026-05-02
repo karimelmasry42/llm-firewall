@@ -142,7 +142,17 @@ def log_decision(app: FastAPI, entry: dict) -> None:
     app.state.decision_log.insert(0, entry)
     if len(app.state.decision_log) > MAX_LOG_SIZE:
         app.state.decision_log.pop()
-    get_broadcaster(app).publish({"type": "decision", "entry": entry})
+    # Pass authoritative aggregate stats with every event so SSE clients
+    # don't have to maintain a running tally locally (which drifts once
+    # the bounded decision_log starts evicting old entries).
+    from llm_firewall.api.dashboard import compute_stats  # local to avoid cycle
+    get_broadcaster(app).publish(
+        {
+            "type": "decision",
+            "entry": entry,
+            "stats": compute_stats(app.state.decision_log),
+        }
+    )
 
 
 def _elapsed_ms(started_at: float) -> float:
@@ -271,6 +281,23 @@ async def process_chat_completion(
     settings = app.state.settings
     request_started_at = time.perf_counter()
     prompt = _extract_prompt(body.get("messages", []))
+
+    # Refuse malformed requests before allocating any conversation state.
+    # Otherwise repeated empty-message POSTs would churn the LRU store.
+    if not prompt:
+        return {
+            "status_code": 400,
+            "payload": {"error": {"message": "No user message found in request."}},
+            "prompt": "",
+            "decision": "ERROR",
+            "content": "",
+            "scores": {},
+            "latencies_ms": {},
+            "total_latency_ms": _elapsed_ms(request_started_at),
+            "detail": "No user message found in request.",
+            "failed_filters": [],
+        }
+
     conversation = conv_state.get_or_create(
         app, conv_state.extract_conversation_id(body)
     )
@@ -312,20 +339,6 @@ async def process_chat_completion(
             "detail": detail,
             "failed_filters": ["conversation_cumulative"],
             "conversation_id": conversation.id,
-        }
-
-    if not prompt:
-        return {
-            "status_code": 400,
-            "payload": {"error": {"message": "No user message found in request."}},
-            "prompt": "",
-            "decision": "ERROR",
-            "content": "",
-            "scores": {},
-            "latencies_ms": {},
-            "total_latency_ms": _elapsed_ms(request_started_at),
-            "detail": "No user message found in request.",
-            "failed_filters": [],
         }
 
     route_decision = route_input_text(

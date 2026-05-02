@@ -85,3 +85,46 @@ def test_log_decision_publishes_to_subscribers():
         assert "timestamp" in event["entry"]
 
     asyncio.run(run())
+
+
+def test_decision_event_carries_authoritative_stats():
+    """The published decision event must include aggregate stats so SSE
+    clients don't have to maintain a local running tally (which drifts
+    once the bounded decision_log starts evicting entries)."""
+    async def run():
+        from llm_firewall.api._processing import log_decision
+
+        app = SimpleNamespace(state=SimpleNamespace(decision_log=[]))
+        bc = get_broadcaster(app)
+        sub = await bc.subscribe()
+
+        for decision in ("ALLOWED", "BLOCKED", "DROPPED"):
+            log_decision(app, {
+                "type": "PASSED",
+                "prompt": "x",
+                "response": "y",
+                "decision": decision,
+                "scores": {},
+                "latencies_ms": {"input:foo": 5.0},
+                "total_latency_ms": 10.0,
+                "detail": "",
+            })
+
+        events = [await asyncio.wait_for(sub.get(), 0.5) for _ in range(3)]
+        for ev in events:
+            assert "stats" in ev, "every decision event must carry aggregate stats"
+            for key in ("total", "blocked", "dropped", "allowed", "errors",
+                        "average_classifier_latency_ms"):
+                assert key in ev["stats"]
+
+        # The last event reflects the full state.
+        final = events[-1]["stats"]
+        assert final["total"] == 3
+        assert final["allowed"] == 1
+        assert final["blocked"] == 1
+        assert final["dropped"] == 1
+        # Counts must reconcile with total — the bug being prevented.
+        assert (final["allowed"] + final["blocked"] + final["dropped"]
+                + final["errors"]) == final["total"]
+
+    asyncio.run(run())

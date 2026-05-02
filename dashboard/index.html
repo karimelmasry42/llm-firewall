@@ -1117,6 +1117,13 @@
                 const resp = await fetch(`${API_BASE}/api/config`);
                 const data = await resp.json();
                 renderConfig(data);
+                // Pull the conversation threshold out of the same response
+                // so we don't have to fetch /api/config a second time on
+                // every dashboard load just to scale the gauge.
+                if (typeof data.conversation_cumulative_threshold === 'number') {
+                    conversationCumulativeThreshold = data.conversation_cumulative_threshold;
+                    renderConversationGauge(0, conversationCumulativeThreshold);
+                }
             } catch (e) {
                 console.warn('Failed to fetch runtime config:', e);
             }
@@ -1210,31 +1217,6 @@
                 formatLatency(stats.average_classifier_latency_ms || 0);
         }
 
-        function recomputeStatsFromLogs(entry) {
-            // Update aggregates locally as new decisions arrive so the UI
-            // doesn't need to round-trip /api/stats for every single event.
-            // The classifier-latency average is updated in-place using a
-            // running mean.
-            if (!sseLatestStats || !entry) return;
-            sseLatestStats.total = (sseLatestStats.total || 0) + 1;
-            if (entry.decision === 'ALLOWED') sseLatestStats.allowed = (sseLatestStats.allowed || 0) + 1;
-            if (entry.decision === 'BLOCKED') sseLatestStats.blocked = (sseLatestStats.blocked || 0) + 1;
-            if (entry.decision === 'DROPPED') sseLatestStats.dropped = (sseLatestStats.dropped || 0) + 1;
-            if (entry.decision === 'ERROR') sseLatestStats.errors = (sseLatestStats.errors || 0) + 1;
-
-            const lat = entry.latencies_ms || {};
-            const sum = Object.values(lat)
-                .filter(v => typeof v === 'number')
-                .reduce((a, b) => a + b, 0);
-            if (sum > 0) {
-                const n = sseLatestStats.total;
-                const prevMean = sseLatestStats.average_classifier_latency_ms || 0;
-                sseLatestStats.average_classifier_latency_ms =
-                    prevMean + (sum - prevMean) / n;
-            }
-            applyStats(sseLatestStats);
-        }
-
         function handleStreamEvent(eventName, data) {
             if (eventName === 'snapshot') {
                 allLogs = Array.isArray(data.logs) ? data.logs : [];
@@ -1248,7 +1230,11 @@
                 // Surgical prepend: only the one new row animates in,
                 // the rest of the table doesn't repaint.
                 prependLog(entry);
-                recomputeStatsFromLogs(entry);
+                // The server attaches authoritative aggregate stats to
+                // every decision event; trust those instead of a local
+                // running tally (which drifts once the backend log starts
+                // evicting at MAX_LOG_SIZE).
+                if (data.stats) applyStats(data.stats);
             }
             // 'heartbeat' is intentionally a no-op — the connection's just alive.
         }
@@ -1339,9 +1325,24 @@
 
         async function startNewConversation() {
             try {
+                // Best-effort reset of the previous conversation so we
+                // don't leave it in the LRU until eviction. The DELETE
+                // endpoint exists for exactly this lifecycle.
+                if (conversationId) {
+                    try {
+                        await fetch(
+                            `${API_BASE}/v1/conversations/${encodeURIComponent(conversationId)}`,
+                            { method: 'DELETE' }
+                        );
+                    } catch (_) { /* best effort */ }
+                }
                 const resp = await fetch(`${API_BASE}/v1/conversations`, { method: 'POST' });
                 const data = await resp.json();
                 conversationId = data.id;
+                // Reset the per-turn delta baseline; otherwise the next
+                // turn would compute Δ against the previous conversation's
+                // cumulative score and report a (usually negative) bogus value.
+                window._lastCumulative = 0;
                 document.getElementById('conv-id-badge').textContent = conversationId;
                 renderConversationGauge(0, conversationCumulativeThreshold);
                 document.getElementById('conv-history').innerHTML =
@@ -1389,7 +1390,14 @@
                 const refusalMessage = runtimeConfig?.refusal_message || 'Sorry, I cannot answer this prompt';
                 let decision = 'ALLOWED';
                 if (content === refusalMessage) {
-                    decision = conv.blocked ? 'BLOCKED' : 'BLOCKED';
+                    // Distinguish a conversation-gate block (BLOCKED, the
+                    // whole conversation is locked) from a per-turn refusal
+                    // (DROPPED, only this prompt failed). The backend
+                    // surfaces the gate via `failed_filters`.
+                    const failed = Array.isArray(data.failed_filters) ? data.failed_filters : [];
+                    decision = (failed.includes('conversation_cumulative') || conv.blocked)
+                        ? 'BLOCKED'
+                        : 'DROPPED';
                 }
 
                 const meta = `score this turn: Δ=${(conv.cumulative_score - (window._lastCumulative || 0)).toFixed(4)} • cumulative ${conv.cumulative_score?.toFixed(4)} / ${conversationCumulativeThreshold ?? '—'}`;
@@ -1420,26 +1428,13 @@
             }
         }
 
-        async function loadConversationThreshold() {
-            // The /api/config endpoint exposes the threshold so the UI gauge
-            // can scale correctly. If the field isn't present (older server)
-            // we leave the gauge as raw cumulative.
-            try {
-                const resp = await fetch(`${API_BASE}/api/config`);
-                const cfg = await resp.json();
-                if (typeof cfg.conversation_cumulative_threshold === 'number') {
-                    conversationCumulativeThreshold = cfg.conversation_cumulative_threshold;
-                    renderConversationGauge(0, conversationCumulativeThreshold);
-                }
-            } catch (e) { /* best effort */ }
-        }
-
         document.getElementById('conv-form').addEventListener('submit', sendConversationMessage);
         document.getElementById('conv-new-button').addEventListener('click', startNewConversation);
-        loadConversationThreshold();
 
-        // Initial load: pull config once (it's static), then subscribe to the
-        // SSE stream which gives us a snapshot followed by push events.
+        // Initial load: pull config once (it's static — fetchConfig also
+        // populates the conversation gauge threshold from the same
+        // response so we don't double-fetch). Then subscribe to the SSE
+        // stream which gives us a snapshot followed by push events.
         // No polling — the dashboard is silent while idle.
         fetchConfig();
         subscribeToStream();

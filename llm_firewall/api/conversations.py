@@ -121,6 +121,11 @@ def get_or_create(app: FastAPI, conversation_id: str | None) -> Conversation:
     return conv
 
 
+def get(app: FastAPI, conversation_id: str) -> Conversation | None:
+    """Look up a conversation without creating one. Returns None if absent."""
+    return _store(app).get(conversation_id)
+
+
 def reset(app: FastAPI, conversation_id: str) -> bool:
     """Drop a conversation from the store. Returns True if it existed."""
     return _store(app).pop(conversation_id, None) is not None

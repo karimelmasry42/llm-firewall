@@ -152,7 +152,7 @@ async def list_conversations(request: Request, limit: int = 50):
 @router.get("/v1/conversations/{conversation_id}")
 async def get_conversation(request: Request, conversation_id: str):
     """Full state of one conversation, including per-turn history."""
-    conv = conv_state._store(request.app).get(conversation_id)
+    conv = conv_state.get(request.app, conversation_id)
     if conv is None:
         return JSONResponse(
             status_code=404,

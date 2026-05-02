@@ -85,6 +85,17 @@ def test_extract_conversation_id_top_level_then_nested():
     assert conv_state.extract_conversation_id({"conversation_id": ""}) is None
 
 
+def test_get_returns_existing_without_creating():
+    app = _fake_app()
+    # Empty store: get() must not allocate.
+    assert conv_state.get(app, "missing") is None
+    store = getattr(app.state, "conversations", None)
+    assert store is None or "missing" not in store
+    # Existing entry round-trips identity.
+    conv = conv_state.get_or_create(app, "exists")
+    assert conv_state.get(app, "exists") is conv
+
+
 def test_summary_and_full_views():
     app = _fake_app()
     conv = conv_state.get_or_create(app, "view-test")

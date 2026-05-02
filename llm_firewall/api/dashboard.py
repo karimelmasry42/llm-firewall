@@ -84,10 +84,14 @@ async def get_logs(request: Request, limit: int = 50):
     return request.app.state.decision_log[:limit]
 
 
-@router.get("/api/stats")
-async def get_stats(request: Request):
-    """Return aggregate stats for the dashboard."""
-    log = request.app.state.decision_log
+def compute_stats(log: list[dict]) -> dict:
+    """Aggregate stats over the full decision log.
+
+    Used by `/api/stats`, the SSE `snapshot` event, and each `decision`
+    event so every consumer sees identical, internally-consistent numbers
+    (totals match the per-decision counts; latency averages are over the
+    same population).
+    """
     return {
         "total": len(log),
         "blocked": sum(1 for entry in log if entry["decision"] == "BLOCKED"),
@@ -101,6 +105,12 @@ async def get_stats(request: Request):
         # and for anyone who actually wants the round-trip number.
         "average_total_latency_ms": _compute_average_total_latency_ms(log),
     }
+
+
+@router.get("/api/stats")
+async def get_stats(request: Request):
+    """Return aggregate stats for the dashboard."""
+    return compute_stats(request.app.state.decision_log)
 
 
 @router.get("/api/config")
@@ -147,19 +157,13 @@ async def stream(request: Request):
             # Snapshot first so the dashboard can render before any new
             # decision arrives. Re-using the same shape as /api/logs +
             # /api/stats keeps the client code simple.
-            log = list(request.app.state.decision_log[:100])
+            full_log = request.app.state.decision_log
+            # Cap the rendered list (fresh tabs need bounded HTML), but
+            # always compute stats from the full log so totals reconcile
+            # with the per-decision counts.
             snapshot = {
-                "logs": log,
-                "stats": {
-                    "total": len(request.app.state.decision_log),
-                    "blocked": sum(1 for e in log if e["decision"] == "BLOCKED"),
-                    "dropped": sum(1 for e in log if e["decision"] == "DROPPED"),
-                    "allowed": sum(1 for e in log if e["decision"] == "ALLOWED"),
-                    "errors": sum(1 for e in log if e["decision"] == "ERROR"),
-                    "average_classifier_latency_ms":
-                        _compute_average_classifier_latency_ms(
-                            request.app.state.decision_log),
-                },
+                "logs": list(full_log[:100]),
+                "stats": compute_stats(full_log),
             }
             yield _sse("snapshot", snapshot)
 

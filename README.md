@@ -2,7 +2,9 @@
 
 > **A real-time, multilingual, conversation-aware firewall for any OpenAI-compatible LLM.** Drop it in front of your model, get prompt-injection / jailbreak / system-prompt-extraction protection in five lines of code, and watch every decision live in the built-in dashboard.
 
-![Live multilingual blocking — English, Spanish, German, Chinese all caught at one threshold](docs/img/multilingual_blocking.png)
+<p align="center">
+  <img src="docs/img/multilingual_blocking.png" alt="Live multilingual blocking — English, Spanish, German, Chinese all caught at one threshold" width="780"/>
+</p>
 
 `Llama-Prompt-Guard-2-86M` (Meta, multilingual, threshold-tuned to **0.001**) inspects every prompt; a regex PII masker scrubs every response; `Tiny-Toxic-Detector` checks every output. Every decision is logged. Every metric is reproducible from a clean checkout. Multi-turn conversations carry a cumulative-score gate that catches slow-burn social-engineering attempts a per-prompt classifier alone would miss.
 
@@ -20,7 +22,7 @@
 | **Languages in training pool** | **21** (10,735 English + 911 non-English including Spanish, Russian, Catalan, German, French, Chinese, Japanese, Thai…) |
 | **Median classifier latency** | ~70 ms on Apple M1 MPS, sub-100 ms on CUDA |
 | **Conversation gate** | Cumulative `P(injection)` across turns — catches multi-step jailbreaks that no single prompt would trigger |
-| **Tests** | **95/95 passing** (62 unit + 33 integration); deterministic eval pipeline |
+| **Tests** | **All passing** (unit + integration); deterministic eval pipeline |
 
 ---
 
@@ -233,7 +235,7 @@ Read-only JSON endpoints power the dashboard:
 | `GET /api/logs?limit=N` | Most recent N decision log entries (1 ≤ N ≤ 500) |
 | `GET /api/stats` | Decision counts + average classifier latency |
 | `GET /api/config` | Runtime config (models, threshold, refusal message) |
-| `GET /health` | `{"status": "healthy"}` |
+| `GET /health` | `{"status": "healthy", "service": "promptshield"}` |
 
 ---
 
