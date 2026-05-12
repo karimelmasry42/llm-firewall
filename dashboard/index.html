@@ -811,11 +811,13 @@
             return `${numeric.toFixed(1)} ms`;
         }
 
-        function getScoreChip(name, value, latencyMs) {
+        function getScoreChip(name, value, latencyMs, blocked) {
             const pct = (value * 100).toFixed(0);
-            let cls = 'safe';
-            if (value > 0.7) cls = 'danger';
-            else if (value > 0.3) cls = 'warning';
+            // Color reflects the classifier's own block/pass decision, not
+            // arbitrary value bands — per-classifier thresholds vary widely
+            // (e.g. Llama-Prompt-Guard-2-86M blocks at 0.001), so a raw-value
+            // cutoff would paint a blocking score green.
+            const cls = blocked ? 'danger' : 'safe';
             const latencyLabel = Number.isFinite(Number(latencyMs))
                 ? ` | ${formatLatency(latencyMs)}`
                 : '';
@@ -856,8 +858,14 @@
         function logRowHtml(log, opts) {
             const scores = log.scores || {};
             const latencies = log.latencies_ms || {};
+            const failed = new Set(log.failed_filters || []);
             const chips = Object.entries(scores)
-                .map(([k, v]) => getScoreChip(k, v, latencies[k]));
+                .map(([k, v]) => {
+                    // `failed_filters` carries the bare classifier display
+                    // name; score keys are prefixed with `input:`/`output:`.
+                    const bareName = k.includes(':') ? k.split(':').slice(1).join(':') : k;
+                    return getScoreChip(k, v, latencies[k], failed.has(bareName));
+                });
             const totalLatencyChip = getTotalLatencyChip(log.total_latency_ms);
             if (totalLatencyChip) chips.push(totalLatencyChip);
             const scoreHtml = chips.join('');

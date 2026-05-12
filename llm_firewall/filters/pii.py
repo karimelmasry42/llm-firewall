@@ -15,7 +15,29 @@ from llm_firewall.filters.base import FilterResult
 
 PII_PATTERNS: dict[str, str] = {
     "EMAIL_ADDRESS": r"[a-zA-Z0-9.\-+_]+@[a-zA-Z0-9.\-+_]+\.[a-zA-Z]+",
-    "PHONE_NUMBER": r"\b(?:\d{3}[-.\s]??\d{3}[-.\s]??\d{4}|\(\d{3}\)\s*\d{3}[-.\s]??\d{4}|\d{3}[-.\s]??\d{4})\b",
+    # Phone numbers — covers:
+    #   * E.164: +15555550123, +447700900123
+    #   * International grouped: +44 7700 900123, +91 98765 43210,
+    #     +33 1 23 45 67 89, +49 30 12345678, +81 90 1234 5678
+    #   * US NANP: (555) 555-0123, 555-555-0123, 555.555.0123, 5555550123
+    #   * Local with area code in parens: (02) 9901 1234, (020) 7946 0123
+    #   * Local 7-digit numbers: 555-0123, 555.0123, 555 0123
+    # Requires 7+ digits in total so we don't mask short numeric IDs.
+    # The leading lookbehind / trailing lookahead replace `\b` because `\b`
+    # is a word boundary that fails before a `+` (both are non-word chars).
+    "PHONE_NUMBER": (
+        r"(?<![\w+])"
+        r"(?=(?:\D*\d){7,}\D*(?!\w))"
+        r"(?:"
+        r"\+\d[\d\s().-]{6,}\d"           # international, must start with +
+        r"|\(\d{2,4}\)[\s.-]?\d[\d\s.-]{4,}\d"  # local with area code in parens
+        r"|\d{3}[-.\s]\d{3}[-.\s]\d{4}"   # US NANP with separators
+        r"|\d{3}[-.\s]\d{4}"              # local 7-digit number with separators
+        r"|\d{10}"                         # bare 10-digit NANP
+        r"|0\d{1,4}[-.\s]\d{2,8}(?:[-.\s]\d{2,8})?"  # domestic trunk: 01632 960123, 020 7946 0123
+        r")"
+        r"(?!\w)"
+    ),
     "URL": r"https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+",
     "IP_ADDRESS": r"\b\d{1,3}(?:\.\d{1,3}){3}\b",
     "IPV6_ADDRESS": r"\b(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b",
