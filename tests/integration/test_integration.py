@@ -77,6 +77,29 @@ class TestIntegration:
         assert response.status_code == 200
         assert response.json()["choices"][0]["message"]["content"] == "Sorry, I cannot answer this prompt"
 
+    @respx.mock
+    def test_firewall_private_fields_stripped_before_upstream(
+        self, client, firewall_settings, sample_openai_response
+    ):
+        route = respx.post(firewall_settings.upstream_chat_completions_url).mock(
+            return_value=httpx.Response(200, json=sample_openai_response)
+        )
+
+        body = {
+            "model": "firewall-demo",
+            "messages": [{"role": "user", "content": "What is the capital of France?"}],
+            "conversation_id": "conv_abc123",
+            "firewall": {"conversation_id": "conv_abc123"},
+        }
+        response = client.post("/v1/chat/completions", json=body)
+
+        assert response.status_code == 200
+        forwarded = json.loads(route.calls[0].request.content)
+        assert "conversation_id" not in forwarded
+        assert "firewall" not in forwarded
+        assert forwarded["model"] == "firewall-demo"
+        assert forwarded["messages"] == body["messages"]
+
     def test_no_user_message_returns_400(self, client):
         response = client.post(
             "/v1/chat/completions",

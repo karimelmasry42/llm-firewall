@@ -486,9 +486,15 @@ async def process_chat_completion(
         scores = dict(input_scores)
         latencies_ms = dict(input_latencies)
         api_key = resolve_upstream_api_key(settings, auth_header)
+        # Strip firewall-private fields before forwarding. OpenAI silently
+        # accepts unknown top-level fields, but stricter OpenAI-compatible
+        # endpoints (e.g. Gemini's) 400 on them.
+        upstream_body = {
+            k: v for k, v in body.items() if k not in ("conversation_id", "firewall")
+        }
         try:
             upstream_response = await forward_to_llm(
-                request_body=body,
+                request_body=upstream_body,
                 llm_api_url=settings.upstream_chat_completions_url,
                 api_key=api_key,
             )
